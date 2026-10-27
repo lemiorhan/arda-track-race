@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tır Yarışı</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Ana menü -->
+  <div id="title" class="overlay">
+    <div class="card hero">
+      <div class="logo">TIR YARIŞI</div>
+      <p class="sub">İki tır, tek yol. Yarış, geri geri park et, kutuları doğru diz.</p>
+      <div class="menu-buttons">
+        <button data-go="setup" class="primary big">Yeni Maç</button>
+        <button data-go="howto" class="big">Nasıl Oynanır</button>
+        <button data-go="settings" class="big">Ayarlar</button>
+        <button data-go="scores" class="big">Skor Tablosu</button>
+      </div>
+      <p class="note">İlk kez mi oynuyorsunuz? Önce <b>Nasıl Oynanır</b>'a bakın. · <kbd>Enter</kbd> yeni maç · <kbd>F</kbd> tam ekran</p>
+    </div>
+  </div>
+
+  <!-- Yeni maç ayarları -->
+  <div id="setup" class="overlay hidden">
+    <div class="card narrow">
+      <h1>Yeni Maç</h1>
+      <div class="form">
+        <label class="field p1"><span><i class="dot"></i>Oyuncu 1 · Mavi</span><input id="name1" type="text" maxlength="14" autocomplete="off"></label>
+        <label class="field p2"><span><i class="dot"></i>Oyuncu 2 · Kırmızı</span><input id="name2" type="text" maxlength="14" autocomplete="off"></label>
+        <div class="field"><span>Tur sayısı</span>
+          <div class="seg" id="segRounds" data-key="rounds"><button data-v="1">1</button><button data-v="3">3</button><button data-v="5">5</button></div>
+        </div>
+        <div class="field"><span>Trafik</span>
+          <div class="seg" id="segTraffic" data-key="traffic"><button data-v="az">Az</button><button data-v="normal">Normal</button><button data-v="yogun">Yoğun</button></div>
+        </div>
+      </div>
+      <p class="note">Her turun sonunda puanlar toplanır. Maçın sonunda toplam puanı yüksek olan şampiyon olur.</p>
+      <div class="actions">
+        <button id="btnSetupGo" class="primary">Rota seçimine geç (Enter)</button>
+        <button data-back>Geri (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rota seçimi -->
+  <div id="routes" class="overlay hidden">
+    <div class="card">
+      <div class="standings">
+        <span id="standRound" class="round"></span>
+        <span class="tot p1" id="standP1"></span>
+        <span class="vs">toplam puan</span>
+        <span class="tot p2" id="standP2"></span>
+      </div>
+      <h2>Rotayı seçin · her oyuncu kendi seçimini yapar</h2>
+      <div id="routeCards" class="routes"></div>
+      <p id="pickNote" class="note"></p>
+      <div class="players">
+        <div class="player p1">
+          <div class="pname"><span class="dot"></span><span id="routesName1"></span></div>
+          <p><kbd>A</kbd> <kbd>D</kbd> rota seç · <kbd>Space</kbd> hazır</p>
+          <div id="ready1" class="ready"></div>
+        </div>
+        <div class="player p2">
+          <div class="pname"><span class="dot"></span><span id="routesName2"></span></div>
+          <p><kbd>←</kbd> <kbd>→</kbd> rota seç · <kbd>Enter</kbd> hazır</p>
+          <div id="ready2" class="ready"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btnRouteStart" class="primary">Hemen başla</button>
+        <button data-go="howto">Nasıl Oynanır</button>
+        <button data-back>Geri (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nasıl oynanır -->
+  <div id="howto" class="overlay hidden">
+    <div class="card">
+      <h1>Nasıl Oynanır?</h1>
+      <p class="sub">Her tur üç aşamadan oluşur. Kutuları ilk doğru dizen turu kazanır.</p>
+      <div class="phases">
+        <div class="phase"><b>1 · Yarış</b><p>Yolda yavaş araçlar ve karşıdan gelen trafik var. Sollamak için gerekirse karşı şeride geçin ama kafa kafaya çarpmayın. Kaza tırı birkaç saniye durdurur. Yoldan çıkınca tır yavaşlar. Her rotanın kendi zorluğu var: Çöl Yolu'nda karşı trafik hızlı, Karlı Geçit'te yol buzlu, Dağ Geçidi'nde bazı virajlar tam gazla dönülmez.</p></div>
+        <div class="phase"><b>2 · Park</b><p>Park alanında kendi renginizdeki bölmeye dorseyi <b>geri geri</b> yanaştırın. Dorse düz olmalı, tamamen bölmenin içinde kalmalı ve rampaya dayanmalı. Geri giderken direksiyonu az kırın. Dorse çok kırılırsa makas atar, o zaman biraz ileri gidip düzeltin.</p></div>
+        <div class="phase"><b>3 · Boşaltma</b><p>İşçiyle dorsenin kapısından kutuları alıp hedef alana taşıyın. Ekrandaki <b>Hedef Dizilim</b> paneli kutuların hangi yığında, hangi sırayla duracağını gösterir: bazen yan yana, bazen üst üste. Dorseden önce kapıya en yakın kutu çıkar. Gereken kutu içerideyse öndekileri yere bırakın ya da kapıdan dorseye geri koyun.</p></div>
+      </div>
+      <h2>Tuşlar</h2>
+      <table class="keys">
+        <thead><tr><th></th><th>Oyuncu 1 · Mavi</th><th>Oyuncu 2 · Kırmızı</th></tr></thead>
+        <tbody>
+          <tr><td>Gaz / ileri yürü</td><td><kbd>W</kbd></td><td><kbd>↑</kbd></td></tr>
+          <tr><td>Fren, geri vites / geri yürü</td><td><kbd>S</kbd></td><td><kbd>↓</kbd></td></tr>
+          <tr><td>Direksiyon / yana yürü</td><td><kbd>A</kbd> <kbd>D</kbd></td><td><kbd>←</kbd> <kbd>→</kbd></td></tr>
+          <tr><td>Kutu al / bırak</td><td><kbd>Space</kbd> veya <kbd>E</kbd></td><td><kbd>Enter</kbd></td></tr>
+          <tr><td>Kurtarma (yola / park girişine dön)</td><td><kbd>Q</kbd></td><td><kbd>Sağ Shift</kbd></td></tr>
+          <tr><td>Duraklat</td><td colspan="2"><kbd>Esc</kbd> veya <kbd>P</kbd> · Ayarlar'da açıksa pencereden çıkınca oyun kendiliğinden durur</td></tr>
+          <tr><td>Tam ekran</td><td colspan="2"><kbd>F</kbd> · menüdeyken veya duraklatınca</td></tr>
+        </tbody>
+      </table>
+      <h2>Puanlama</h2>
+      <table class="keys"><tbody id="ruleBody"></tbody></table>
+      <p class="note">Par süreler: <span id="parList"></span>. Tur puanı 0'ın altına düşmez. Maç sonunda toplam puanı yüksek olan şampiyon olur.</p>
+      <div class="actions"><button data-back class="primary">Geri (Esc)</button></div>
+    </div>
+  </div>
+
+  <!-- Ayarlar -->
+  <div id="settings" class="overlay hidden">
+    <div class="card narrow">
+      <h1>Ayarlar</h1>
+      <div class="form">
+        <label class="toggle"><input id="setSound" type="checkbox"><span>Ses</span></label>
+        <label class="field"><span>Ses seviyesi</span><input id="setVolume" type="range" min="0" max="100" step="5"></label>
+        <label class="toggle"><input id="setShake" type="checkbox"><span>Kazada ekran sallansın</span></label>
+        <label class="toggle"><input id="setAutoPause" type="checkbox"><span>Pencereden çıkınca duraklat</span></label>
+        <div class="field"><span>Görüntü</span><button id="btnFullscreen">Tam ekran aç / kapat (F)</button></div>
+      </div>
+      <p class="note">Ayarlar bu tarayıcıda saklanır.</p>
+      <div class="actions"><button data-back class="primary">Geri (Esc)</button></div>
+    </div>
+  </div>
+
+  <!-- Skor tablosu -->
+  <div id="scores" class="overlay hidden">
+    <div class="card">
+      <h1>Skor Tablosu</h1>
+      <h2>En yüksek tur puanları</h2>
+      <table class="list">
+        <thead><tr><th>#</th><th>Oyuncu</th><th>Rota</th><th>Puan</th><th>Tarih</th></tr></thead>
+        <tbody id="hiBody"></tbody>
+      </table>
+      <h2>Son maçlar</h2>
+      <table class="list">
+        <thead><tr><th>Tarih</th><th>Skor</th><th>Tur</th><th>Şampiyon</th></tr></thead>
+        <tbody id="matchBody"></tbody>
+      </table>
+      <div class="actions">
+        <button data-back class="primary">Geri (Esc)</button>
+        <button id="btnClearScores" class="danger">Skorları sıfırla</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Duraklatma -->
+  <div id="pause" class="overlay hidden">
+    <div class="card small">
+      <h1>DURAKLATILDI</h1>
+      <div class="menu-buttons">
+        <button id="btnResume" class="primary big">Devam (Esc)</button>
+        <button id="btnRestart" class="big">Turu yeniden başlat</button>
+        <button data-go="howto" class="big">Nasıl Oynanır</button>
+        <button data-go="settings" class="big">Ayarlar</button>
+        <button id="btnPauseMenu" class="big danger">Ana menü</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tur sonucu -->
+  <div id="roundResult" class="overlay hidden">
+    <div class="card">
+      <h1 id="rrTitle" class="center"></h1>
+      <p id="rrSub" class="sub center"></p>
+      <div id="rrBody" class="rr-grid"></div>
+      <div class="actions center"><button id="btnNext" class="primary"></button></div>
+    </div>
+  </div>
+
+  <!-- Maç sonucu -->
+  <div id="matchResult" class="overlay hidden">
+    <div class="card">
+      <h1 id="mrTitle" class="center"></h1>
+      <div id="mrTotals" class="mr-totals"></div>
+      <table class="list">
+        <thead><tr><th>Tur</th><th>Rota</th><th id="mrHead1"></th><th id="mrHead2"></th><th>Kazanan</th></tr></thead>
+        <tbody id="mrBody"></tbody>
+      </table>
+      <div class="actions center">
+        <button id="btnRematch" class="primary">Rövanş (Enter)</button>
+        <button id="btnMatchMenu">Ana menü (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Onay -->
+  <div id="confirm" class="overlay modal hidden">
+    <div class="card small">
+      <p id="confirmText" class="confirm-text"></p>
+      <div class="actions center">
+        <button id="btnYes" class="danger">Evet (Enter)</button>
+        <button id="btnNo">Vazgeç (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/util.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/road.js"></script>
+  <script src="js/truck.js"></script>
+  <script src="js/traffic.js"></script>
+  <script src="js/lot.js"></script>
+  <script src="js/score.js"></script>
+  <script src="js/boxes.js"></script>
+  <script src="js/hud.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>

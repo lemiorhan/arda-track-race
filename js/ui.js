@@ -1,0 +1,348 @@
+'use strict';
+(function () {
+  const TR = window.TR, U = TR.U, G = TR.Game;
+  const $ = (id) => document.getElementById(id);
+  const SCREENS = ['title', 'setup', 'routes', 'howto', 'settings', 'scores', 'pause', 'roundResult', 'matchResult'];
+  const SUB = ['howto', 'settings', 'scores'];
+  const RESULT_LOCK_MS = 1200;
+  // Player names are typed by the user and end up in innerHTML.
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  const UI = (TR.UI = { current: null, returnTo: 'title', lockT: 0, picks: [0, 0], ready: [false, false], confirmYes: null });
+
+  function show(id) {
+    // A control left focused (a checkbox in settings, say) would react to the players' Space/Enter.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    for (const s of SCREENS) $(s).classList.toggle('hidden', s !== id);
+    UI.current = id;
+    UI.lockT = performance.now() + (id === 'roundResult' || id === 'matchResult' ? RESULT_LOCK_MS : 150);
+  }
+  UI.hideAll = () => show(null);
+
+  function openSub(id) {
+    UI.returnTo = UI.current;
+    if (id === 'settings') fillSettings();
+    if (id === 'scores') fillScores();
+    show(id);
+  }
+
+  function back() {
+    const c = UI.current;
+    if (SUB.includes(c)) return show(UI.returnTo || 'title');
+    if (c === 'setup') return show('title');
+    if (c === 'routes') {
+      if (G.series && G.series.history.length) return confirmBox('Maçtan çıkılsın mı? Bu maçın toplam puanı kaybolur.', toTitle);
+      return openSetup();
+    }
+    if (c === 'pause') return G.resume();
+    if (c === 'matchResult') return toTitle();
+  }
+
+  function toTitle() {
+    G.toMenu();
+    show('title');
+  }
+
+  function confirmBox(text, yes) {
+    $('confirmText').textContent = text;
+    UI.confirmYes = yes;
+    $('confirm').classList.remove('hidden');
+    UI.lockT = performance.now() + 150;
+  }
+
+  function closeConfirm(ok) {
+    $('confirm').classList.add('hidden');
+    const f = UI.confirmYes;
+    UI.confirmYes = null;
+    if (ok && f) f();
+  }
+
+  // ---------- setup ----------
+  function segSet(id, value) {
+    $(id).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === value));
+  }
+
+  function openSetup() {
+    const s = TR.Settings.get();
+    $('name1').value = s.names[0];
+    $('name2').value = s.names[1];
+    segSet('segRounds', String(s.rounds));
+    segSet('segTraffic', s.traffic);
+    show('setup');
+  }
+
+  function startMatch() {
+    const clean = (v, d) => (v || '').trim().slice(0, 14) || d;
+    TR.Settings.set({ names: [clean($('name1').value, 'Mavi Tır'), clean($('name2').value, 'Kırmızı Tır')] });
+    $('name1').blur();
+    $('name2').blur();
+    G.newSeries();
+    openRoutes();
+  }
+
+  // ---------- route select ----------
+  function buildRoutes() {
+    const box = $('routeCards');
+    TR.ROUTES.forEach((r, i) => {
+      const el = document.createElement('div');
+      el.className = 'route';
+      el.dataset.i = i;
+      el.innerHTML =
+        '<div class="route-tag">' + r.tag + '</div><h3>' + r.name + '</h3>' +
+        '<div class="route-level" title="Zorluk ' + r.level + ' / 5">' +
+        '<b>' + '●'.repeat(r.level) + '</b>' + '●'.repeat(5 - r.level) + '</div><p>' + r.desc + '</p>' +
+        '<div class="route-meta">' + (r.length / 10000).toFixed(1).replace('.', ',') + ' km · par ' +
+        U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '') + '</div>' +
+        '<div class="picks"><span class="pk p1">1</span><span class="pk p2">2</span></div>';
+      el.addEventListener('click', () => {
+        TR.Audio.unlock();
+        if (!UI.ready[0]) UI.picks[0] = i;
+        if (!UI.ready[1]) UI.picks[1] = i;
+        refreshRoutes();
+      });
+      box.appendChild(el);
+    });
+  }
+
+  function openRoutes() {
+    G.state = 'menu';
+    UI.ready = [false, false];
+    const sr = G.series;
+    $('standRound').textContent = 'Tur ' + (sr.history.length + 1) + ' / ' + sr.rounds;
+    $('standP1').textContent = sr.names[0] + '  ' + sr.totals[0];
+    $('standP2').textContent = sr.totals[1] + '  ' + sr.names[1];
+    $('routesName1').textContent = sr.names[0];
+    $('routesName2').textContent = sr.names[1];
+    refreshRoutes();
+    show('routes');
+  }
+
+  function refreshRoutes() {
+    document.querySelectorAll('.route').forEach((el) => {
+      const i = +el.dataset.i;
+      el.classList.toggle('sel1', UI.picks[0] === i);
+      el.classList.toggle('sel2', UI.picks[1] === i);
+    });
+    $('ready1').classList.toggle('on', UI.ready[0]);
+    $('ready2').classList.toggle('on', UI.ready[1]);
+    $('ready1').textContent = UI.ready[0] ? 'HAZIR ✔' : 'Hazır mısın? (Space)';
+    $('ready2').textContent = UI.ready[1] ? 'HAZIR ✔' : 'Hazır mısın? (Enter)';
+    $('pickNote').textContent = UI.picks[0] === UI.picks[1]
+      ? 'İki oyuncu da aynı rotayı seçti.'
+      : 'Farklı rotalar seçildi: ikiniz de hazır olunca yazı-tura atılacak.';
+    G.previewIdx = UI.picks[0];
+  }
+
+  function routesInput() {
+    const n = TR.ROUTES.length;
+    for (let i = 0; i < 2; i++) {
+      const inp = TR.Input.player(i);
+      if (!UI.ready[i] && inp.left) { UI.picks[i] = (UI.picks[i] + n - 1) % n; refreshRoutes(); }
+      if (!UI.ready[i] && inp.right) { UI.picks[i] = (UI.picks[i] + 1) % n; refreshRoutes(); }
+      if (inp.action) {
+        TR.Audio.unlock();
+        UI.ready[i] = !UI.ready[i];
+        TR.Audio.beep();
+        refreshRoutes();
+      }
+    }
+    if (UI.ready[0] && UI.ready[1]) startRound();
+  }
+
+  function startRound() {
+    let ri = UI.picks[0], note = null;
+    if (UI.picks[0] !== UI.picks[1]) {
+      ri = UI.picks[Math.random() < 0.5 ? 0 : 1];
+      note = 'Yazı-tura: ' + TR.ROUTES[ri].name;
+    }
+    G.startRound(ri);
+    UI.hideAll();
+    if (note) G.players.forEach((p) => { p.toast = note; p.toastColor = '#ffd54f'; p.toastT = 3.5; });
+  }
+
+  // ---------- results ----------
+  UI.showPause = () => show('pause');
+
+  UI.showRoundResult = (scores, places) => {
+    const sr = G.series, w = G.winner;
+    $('rrTitle').textContent = w.name.toUpperCase() + ' TURU KAZANDI!';
+    $('rrTitle').style.color = w.color;
+    $('rrSub').textContent = 'Tur ' + sr.history.length + ' / ' + sr.rounds + ' · ' + G.route.name + ' · ' + U.fmtTime(w.times.unload);
+    const seg = (a, b) => (a != null && b != null ? U.fmtTime(a - b) : '—');
+    $('rrBody').innerHTML = G.players.map((p, i) => {
+      const sc = scores[i], t = p.times;
+      const rows = sc.items.map((it) => '<tr><td>' + it.label + '</td><td class="' + (it.pts < 0 ? 'neg' : 'pos') + '">' +
+        (it.pts > 0 ? '+' : '') + it.pts + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">Puan yok</td></tr>';
+      const floor = sc.sum < 0 ? '<div class="muted small">Tur puanı 0\'ın altına düşmez.</div>' : '';
+      const place = places[i] >= 0 ? '<div class="badge">🏅 Rekor listesinde ' + (places[i] + 1) + '. sıra</div>' : '';
+      return '<div class="rr-col" style="--pc:' + p.color + '"><h3>' + esc(p.name) + (p === w ? ' 🏆' : '') + '</h3>' +
+        '<table class="score">' + rows + '<tr class="sum"><td>Tur puanı</td><td>' + sc.total + '</td></tr>' +
+        '<tr class="sum total"><td>Maç toplamı</td><td>' + sr.totals[i] + '</td></tr></table>' + floor +
+        '<div class="times">Yarış ' + U.fmtTime(t.race) + ' · Park ' + seg(t.park, t.race) + ' · Boşaltma ' + seg(t.unload, t.park) + '</div>' +
+        place + '</div>';
+    }).join('');
+    $('btnNext').textContent = G.isLastRound() ? 'Maç sonucu (Enter)' : 'Sonraki tur (Enter)';
+    show('roundResult');
+  };
+
+  function nextFromRound() {
+    if (G.isLastRound()) showMatchResult();
+    else openRoutes();
+  }
+
+  function showMatchResult() {
+    const sr = G.series;
+    const [a, b] = sr.totals;
+    const champ = a === b ? -1 : a > b ? 0 : 1;
+    $('mrTitle').textContent = champ < 0 ? 'BERABERE!' : sr.names[champ].toUpperCase() + ' ŞAMPİYON!';
+    $('mrTitle').style.color = champ < 0 ? '#fff' : ['#1e88e5', '#e53935'][champ];
+    $('mrTotals').innerHTML =
+      '<div class="tot p1"><span>' + esc(sr.names[0]) + '</span><b>' + a + '</b><small>' + sr.wins[0] + ' tur</small></div>' +
+      '<div class="vs">–</div>' +
+      '<div class="tot p2"><span>' + esc(sr.names[1]) + '</span><b>' + b + '</b><small>' + sr.wins[1] + ' tur</small></div>';
+    $('mrHead1').textContent = sr.names[0];
+    $('mrHead2').textContent = sr.names[1];
+    $('mrBody').innerHTML = sr.history.map((h, k) =>
+      '<tr><td>' + (k + 1) + '</td><td>' + h.route + '</td><td>' + h.scores[0] + '</td><td>' + h.scores[1] + '</td><td>' +
+      esc(sr.names[h.winner]) + ' · ' + U.fmtTime(h.time) + '</td></tr>').join('');
+    TR.Scores.addMatch({ date: Date.now(), names: sr.names.slice(), totals: sr.totals.slice(), champ, rounds: sr.rounds });
+    G.state = 'matchover';
+    show('matchResult');
+  }
+
+  function rematch() {
+    G.newSeries();
+    openRoutes();
+  }
+
+  // ---------- settings and scores ----------
+  function applySettings() {
+    const s = TR.Settings.get();
+    TR.Audio.setMuted(!s.sound);
+    TR.Audio.setVolume(s.volume);
+  }
+
+  function fillSettings() {
+    const s = TR.Settings.get();
+    $('setSound').checked = s.sound;
+    $('setVolume').value = Math.round(s.volume * 100);
+    $('setShake').checked = s.shake;
+    $('setAutoPause').checked = s.autoPause;
+  }
+
+  function fillScores() {
+    const day = (t) => new Date(t).toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const rounds = TR.Scores.rounds();
+    $('hiBody').innerHTML = rounds.length
+      ? rounds.map((r, k) => '<tr><td>' + (k + 1) + '</td><td><span class="dot" style="--pc:' + esc(r.color) + '"></span>' + esc(r.name) +
+        '</td><td>' + esc(r.route) + '</td><td><b>' + Number(r.score) + '</b></td><td>' + day(r.date) + '</td></tr>').join('')
+      : '<tr><td colspan="5" class="muted">Henüz kayıtlı tur yok.</td></tr>';
+    const matches = TR.Scores.matches();
+    $('matchBody').innerHTML = matches.length
+      ? matches.map((m) => '<tr><td>' + day(m.date) + '</td><td>' + esc(m.names[0]) + ' ' + Number(m.totals[0]) + ' – ' + Number(m.totals[1]) + ' ' + esc(m.names[1]) +
+        '</td><td>' + Number(m.rounds) + ' tur</td><td>' + (m.champ < 0 ? 'Berabere' : esc(m.names[m.champ])) + '</td></tr>').join('')
+      : '<tr><td colspan="4" class="muted">Henüz bitmiş maç yok.</td></tr>';
+  }
+
+  function fillHowto() {
+    $('ruleBody').innerHTML = TR.scoreRuleRows().map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
+    $('parList').textContent = TR.ROUTES.map((r) => r.name + ' ' + U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '')).join(' · ');
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+      if (p && p.catch) p.catch(() => {});
+    } else if (document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  // ---------- keyboard ----------
+  UI.handleKeys = () => {
+    const I = TR.Input;
+    const enter = ['Enter', 'NumpadEnter'];
+    if (!$('confirm').classList.contains('hidden')) {
+      if (performance.now() < UI.lockT) return;
+      if (I.wasHit(enter)) closeConfirm(true);
+      else if (I.wasHit(['Escape'])) closeConfirm(false);
+      return;
+    }
+    const c = UI.current;
+    if (c === null) {
+      if (I.wasHit(['Escape', 'KeyP'])) G.pause();
+      return;
+    }
+    if (performance.now() < UI.lockT) return;
+    if (c === 'routes') {
+      if (I.wasHit(['Escape'])) back();
+      else routesInput();
+    } else if (c === 'pause') {
+      if (I.wasHit(['Escape', 'KeyP'])) G.resume();
+    } else if (c === 'title') {
+      if (I.wasHit(enter)) openSetup();
+    } else if (c === 'setup') {
+      if (I.wasHit(enter)) startMatch();
+      else if (I.wasHit(['Escape'])) back();
+    } else if (c === 'roundResult') {
+      if (I.wasHit(enter.concat('Space'))) nextFromRound();
+    } else if (c === 'matchResult') {
+      if (I.wasHit(enter.concat('Space'))) rematch();
+      else if (I.wasHit(['Escape'])) toTitle();
+    } else if (I.wasHit(['Escape'])) back();
+  };
+
+  // ---------- wiring ----------
+  function init() {
+    applySettings();
+    buildRoutes();
+    fillHowto();
+    document.querySelectorAll('[data-go]').forEach((b) =>
+      b.addEventListener('click', () => (b.dataset.go === 'setup' ? openSetup() : openSub(b.dataset.go))));
+    document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', back));
+    document.querySelectorAll('.seg').forEach((seg) =>
+      seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+        const v = seg.dataset.key === 'rounds' ? +b.dataset.v : b.dataset.v;
+        TR.Settings.set({ [seg.dataset.key]: v });
+        segSet(seg.id, b.dataset.v);
+      })));
+    $('btnSetupGo').addEventListener('click', startMatch);
+    $('btnRouteStart').addEventListener('click', startRound);
+    $('btnResume').addEventListener('click', () => G.resume());
+    $('btnRestart').addEventListener('click', () => confirmBox('Bu tur baştan başlasın mı? Turdaki puanlar silinir.', () => {
+      G.restartRound();
+      UI.hideAll();
+    }));
+    $('btnPauseMenu').addEventListener('click', () => confirmBox('Ana menüye dönülsün mü? Bu maçın puanları kaydedilmez.', toTitle));
+    $('btnNext').addEventListener('click', nextFromRound);
+    $('btnRematch').addEventListener('click', rematch);
+    $('btnMatchMenu').addEventListener('click', toTitle);
+    $('btnYes').addEventListener('click', () => closeConfirm(true));
+    $('btnNo').addEventListener('click', () => closeConfirm(false));
+    $('btnFullscreen').addEventListener('click', toggleFullscreen);
+    $('btnClearScores').addEventListener('click', () => confirmBox('Tüm skorlar silinsin mi?', () => {
+      TR.Scores.clear();
+      fillScores();
+    }));
+    $('setSound').addEventListener('change', (e) => { TR.Settings.set({ sound: e.target.checked }); applySettings(); });
+    $('setVolume').addEventListener('input', (e) => { TR.Settings.set({ volume: e.target.value / 100 }); applySettings(); });
+    $('setShake').addEventListener('change', (e) => TR.Settings.set({ shake: e.target.checked }));
+    $('setAutoPause').addEventListener('change', (e) => TR.Settings.set({ autoPause: e.target.checked }));
+    // Fullscreen needs a user gesture, so it is handled in the key event itself rather than in the frame loop.
+    // F sits next to P1's D and E, so it is ignored while a round is running.
+    const driving = () => ['countdown', 'play', 'finishing'].includes(TR.Game.state);
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'KeyF' || driving()) return;
+      if (!(e.target instanceof HTMLInputElement && e.target.type === 'text')) toggleFullscreen();
+    });
+    window.addEventListener('keydown', () => TR.Audio.unlock(), { once: true });
+    // A focused button would swallow the players' Space/Enter presses.
+    document.addEventListener('click', (e) => {
+      if (e.target instanceof HTMLButtonElement) e.target.blur();
+    });
+    show('title');
+    G.start();
+  }
+
+  init();
+})();
