@@ -11,10 +11,10 @@
   ];
   const KIND_TOTAL = KINDS.reduce((a, k) => a + k.w, 0);
   const NO_TRAFFIC_TAIL = 900;
-  // Each racer keeps its own target of cars per direction in [s - WIN_BACK, s + WIN_AHEAD].
-  // A shared pool spawned ahead of one truck crowds or thins the other's road, and floods
-  // the last racer once the other has left the road.
-  const WIN_BACK = 200, WIN_AHEAD = 2800, WINDOW_SHARE = 0.45, POOL = 1.6;
+  // A respawn goes ahead of the racer whose [s - WIN_BACK, s + WIN_AHEAD] window is furthest below
+  // target[dir], so the last racer is not flooded once the other leaves. A surplus is never
+  // removed, and a window stays short while every POOL car is awake.
+  const WIN_BACK = 200, WIN_AHEAD = 2800, WINDOW_SHARE = 0.3, POOL = 2.4;
 
   class Traffic {
     constructor(road, route, seed, density) {
@@ -30,8 +30,10 @@
         const s0 = dir > 0 ? 1250 : 1400, span = TR.ROAD.START_S + WIN_AHEAD - s0;
         for (let k = 0; k < Math.round(count[dir] * POOL); k++) {
           const c = this.makeCar(dir);
-          if (k < t) this.setS(c, Math.min(L, s0 + ((k + this.rnd()) * span) / t));
-          else { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
+          if (k < t) {
+            this.setS(c, Math.min(L, s0 + ((k + 0.5 * this.rnd()) * span) / t));
+            if (!this.laneFree(c, c.d, 120, 120)) { c.lane = 1 - c.lane; this.setS(c, c.s); }
+          } else { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
           this.cars.push(c);
         }
       }
@@ -181,7 +183,7 @@
         .sort((a, b) => b.deficit - a.deficit);
       const dir = c.dir;
       for (const { p } of short) {
-        for (let tries = 0; tries < 4; tries++) {
+        for (let tries = 0; tries < 8; tries++) {
           const s = p.s + (dir > 0 ? this.rnd.range(950, 2300) : this.rnd.range(1100, 2800));
           if (s > tail) continue;
           Object.assign(c, this.makeCar(dir));
