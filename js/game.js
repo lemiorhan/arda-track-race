@@ -409,7 +409,7 @@
 
   function drawTruck(q) {
     const open = q.phase === 'unload' || q.phase === 'done';
-    q.truck.draw(ctx, { label: !open, open, cargo: q.unloader ? q.unloader.cargoFromDoor() : null, nextGlow: true });
+    q.truck.draw(ctx, { label: !open, steer: !open, open, cargo: q.unloader ? q.unloader.cargoFromDoor() : null, nextGlow: true });
   }
 
   function renderView(p, vp) {

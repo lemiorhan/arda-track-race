@@ -120,6 +120,7 @@
       opt = opt || {};
       this.drawTractor(ctx);
       this.drawTrailer(ctx, opt);
+      if (opt.steer) this.drawSteer(ctx);
       if (opt.label) {
         const c = this.cabBox();
         ctx.save();
@@ -181,6 +182,39 @@
       ctx.fillStyle = '#ffe9a6';
       ctx.fillRect(T.CAB_FRONT - 2, -T.CAB_HW + 2, 2, 6);
       ctx.fillRect(T.CAB_FRONT - 2, T.CAB_HW - 8, 2, 6);
+      ctx.restore();
+    }
+
+    // Shows the steering input, not the wheel angle: at speed the grip limit in update()
+    // keeps delta near zero, so the front wheels alone barely move.
+    drawSteer(ctx) {
+      const a = Math.abs(this.steer);
+      if (a < 0.05) return;
+      const s = Math.sign(this.steer), r = 40, A = a * 1.4, x0 = T.CAB_FRONT + 8;
+      const ex = x0 + r * Math.sin(A), ey = s * r * (1 - Math.cos(A)), h = s * A;
+      const ch = Math.cos(h), sh = Math.sin(h);
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.th);
+      ctx.globalAlpha = Math.min(1, a * 2.5);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const [lw, color] of [[9, 'rgba(0,0,0,0.5)'], [5, '#fff']]) {
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        ctx.arc(x0, s * r, r, -s * Math.PI / 2, s * (A - Math.PI / 2), s < 0);
+        ctx.stroke();
+        ctx.lineWidth = lw - 4;
+        ctx.beginPath();
+        ctx.moveTo(ex + ch * 14, ey + sh * 14);
+        ctx.lineTo(ex - sh * 9, ey + ch * 9);
+        ctx.lineTo(ex + sh * 9, ey - ch * 9);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
