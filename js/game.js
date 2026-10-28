@@ -34,29 +34,35 @@
   resize();
 
   // ---------- match and rounds ----------
-  G.newSeries = () => {
+  G.newSeries = (names, assist) => {
     const s = TR.Settings.get();
-    G.series = { rounds: s.rounds, round: 1, names: s.names.slice(), assist: s.assist.slice(), totals: [0, 0], wins: [0, 0], history: [] };
+    G.series = {
+      id: Date.now(), rounds: s.rounds, round: 1, names: (names || s.names).slice(), assist: (assist || s.assist).slice(),
+      totals: [0, 0], wins: [0, 0], history: [],
+    };
   };
 
   G.isLastRound = () => G.series.history.length >= G.series.rounds;
 
-  G.startRound = (ri) => {
+  // An online guest passes the host's opts, so both machines build the same round.
+  G.startRound = (ri, opts) => {
     const sr = G.series;
     sr.round = sr.history.length + 1;
     const route = TR.ROUTES[ri];
+    const s = TR.Settings.get();
+    const o = (G.roundOpts = Object.assign({ ri, seed: ((Date.now() & 0xffffff) ^ route.seed) >>> 0, traffic: s.traffic, weather: s.weather }, opts));
+    const seed = o.seed;
     G.routeIdx = ri;
     G.route = route;
     G.road = new TR.Road(route);
     TR.Assist.prepare(G.road);
     G.lot = new TR.Lot(G.road.endX, G.road.endY);
-    const seed = ((Date.now() & 0xffffff) ^ route.seed) >>> 0;
     G.events = new TR.Events(G.road, seed * 23 + 7);
-    G.traffic = new TR.Traffic(G.road, route, seed, DENSITY[TR.Settings.get().traffic] || 1, G.events);
+    G.traffic = new TR.Traffic(G.road, route, seed, DENSITY[o.traffic] || 1, G.events);
     G.junctions = new TR.Junctions(G.road, G.traffic, seed * 19 + 11);
     G.plan = TR.makeCargoPlan(U.rng(seed * 7 + 3));
     G.contract = U.rng(seed * 13 + 5).pick(TR.CONTRACTS);
-    G.weather = TR.Settings.get().weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
+    G.weather = o.weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
     G.players = COLORS.map((color, i) => {
       const lane = i === 0 ? R.LANE / 2 : R.LANE * 1.5;
       const q = G.road.posAt(R.START_S, lane);
@@ -83,21 +89,27 @@
     G.lastChance = false;
     G.touchCd = 0;
     TR.FX.reset();
+    TR.Online.share('round', o);
   };
 
   G.restartRound = () => G.startRound(G.routeIdx);
 
+  // An online guest only asks; the host pauses and resumes both machines.
   G.pause = () => {
+    if (TR.Online.ask('pause')) return;
     if (G.state !== 'play' && G.state !== 'countdown') return;
     G.paused = G.state;
     G.state = 'paused';
     TR.UI.showPause();
+    TR.Online.share('pause');
   };
 
   G.resume = () => {
+    if (TR.Online.ask('resume')) return;
     if (G.state !== 'paused') return;
     G.state = G.paused;
     TR.UI.hideAll();
+    TR.Online.share('resume');
   };
 
   G.toMenu = () => {
@@ -105,18 +117,23 @@
     G.series = null;
   };
 
+  // The records list keeps the round's own score, before the final round's multiplier. Returns each
+  // player's place in it, or -1.
+  G.recordRound = (scores) => G.players.map((p, i) => scores[i].base > 0
+    ? TR.Scores.addRound({ name: p.name, color: p.color, route: G.route.name, score: scores[i].base, date: Date.now(), assist: p.assist })
+    : -1);
+
   function endRound() {
     const sr = G.series;
     const scores = G.players.map((p) => TR.roundScore(p, G, true));
     scores.forEach((sc, i) => (sr.totals[i] += sc.total));
     sr.wins[G.winner.idx]++;
     sr.history.push({ route: G.route.name, scores: scores.map((sc) => sc.total), winner: G.winner.idx, time: G.winner.times.unload });
-    // The records list keeps the round's own score, before the final round's multiplier.
-    const places = G.players.map((p, i) => scores[i].base > 0
-      ? TR.Scores.addRound({ name: p.name, color: p.color, route: G.route.name, score: scores[i].base, date: Date.now(), assist: p.assist })
-      : -1);
+    const places = G.recordRound(scores);
+    const titles = TR.roundTitles(G.players);
     G.state = 'roundover';
-    TR.UI.showRoundResult(scores, places, TR.roundTitles(G.players));
+    TR.UI.showRoundResult(scores, places, titles);
+    TR.Online.share('roundResult', { scores, titles });
   }
 
   function toast(p, text, color, t) {
@@ -147,7 +164,8 @@
     for (const p of G.players) postPhysics(p, dt);
     for (const p of G.players) emitFx(p, dt);
     TR.FX.update(dt);
-    const views = viewports().map((vp, i) => viewOf(G.players[i], vp));
+    // Traffic appears out of sight of every screen, the online guest's too.
+    const views = viewports().concat(TR.Online.remoteViewports()).map((vp) => viewOf(G.players[vp.idx], vp));
     for (const e of G.junctions.update(dt, G.players, G.time)) junctionEvent(e);
     for (const e of G.events.update(dt, G.players, G.traffic)) roadEvent(e);
     G.traffic.update(dt, G.players, views, () => TR.Audio.horn(), G.junctions);
@@ -492,10 +510,14 @@
     }
   }
 
+  // Online, a machine may show only its own player's truck, full width.
   function viewports() {
+    const solo = TR.Online.soloIdx();
+    if (solo >= 0) return [{ idx: solo, x: 0, y: 0, w: W, h: H }];
     const half = Math.floor(W / 2);
-    return [{ x: 0, y: 0, w: half - 2, h: H }, { x: half + 2, y: 0, w: W - half - 2, h: H }];
+    return [{ idx: 0, x: 0, y: 0, w: half - 2, h: H }, { idx: 1, x: half + 2, y: 0, w: W - half - 2, h: H }];
   }
+  G.viewSizes = () => viewports().map((vp) => ({ idx: vp.idx, w: vp.w, h: vp.h }));
 
   function viewOf(p, vp) {
     const z = p.cam.z * Math.max(0.6, vp.h / 820);
@@ -589,7 +611,7 @@
     q.truck.draw(ctx, { label: !open, steer: !open, open, cargo: q.unloader ? q.unloader.cargoFromDoor() : null, nextGlow: true });
   }
 
-  function renderView(p, vp) {
+  function renderView(p, vp, solo) {
     const view = viewOf(p, vp);
     ctx.save();
     ctx.beginPath();
@@ -622,6 +644,7 @@
     TR.Light.draw(ctx, vp, view, p, G, world, DPR);
     if (G.route.id === 'kar') TR.FX.drawSnow(ctx, vp, p.cam, G.time);
     TR.HUD.draw(ctx, vp, p, G);
+    if (solo) TR.HUD.drawRival(ctx, vp, p, G);
   }
 
   function renderPreview(dt) {
@@ -655,16 +678,19 @@
       return;
     }
     const vps = viewports();
-    G.players.forEach((p, i) => renderView(p, vps[i]));
+    for (const vp of vps) renderView(G.players[vp.idx], vp, vps.length === 1);
+    if (vps.length === 1) return;
     ctx.fillStyle = '#0d0f12';
     ctx.fillRect(Math.floor(W / 2) - 2, 0, 4, H);
   }
 
+  // A hidden tab gets no animation frames, so online a hidden host would freeze both machines; it pauses
+  // whatever the setting says.
   window.addEventListener('blur', () => {
     if (TR.Settings.get().autoPause) G.pause();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && TR.Settings.get().autoPause) G.pause();
+    if (document.hidden && (TR.Settings.get().autoPause || TR.Online.role)) G.pause();
   });
 
   // Engines idle through the countdown and fall silent in menus, pause, the round result and once a
@@ -677,13 +703,24 @@
     }));
   }
 
+  // An online guest simulates nothing: it shows the host's latest state and moves only its own cameras
+  // and particles.
+  function guestUpdate(dt) {
+    TR.Online.apply();
+    if (!G.road || !['countdown', 'play', 'finishing'].includes(G.state)) return;
+    updateCams(dt);
+    TR.FX.update(dt);
+  }
+
   // ---------- loop ----------
   let last = performance.now();
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     TR.UI.handleKeys();
-    if (G.state !== 'paused' && G.state !== 'menu') update(dt);
+    if (TR.Online.role === 'guest') guestUpdate(dt);
+    else if (G.state !== 'paused' && G.state !== 'menu') update(dt);
+    TR.Online.tick(now);
     render(dt);
     updateEngines();
     TR.Input.endFrame();

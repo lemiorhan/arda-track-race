@@ -74,6 +74,7 @@
       this.rnd = U.rng(seed);
       this.time = 0;
       this.cars = [];
+      this.nextId = 0;
       this.paths = [];
       this.states = road.points.map((j) => ({
         j, passed: [false, false], flash: 0, front: [-Infinity, -Infinity],
@@ -116,7 +117,7 @@
 
     carFor(path, pos, like) {
       const c = {
-        path, pos, kind: like.kind, len: like.len, wid: like.wid, color: like.color, vBase: like.vBase, v: like.v,
+        id: ++this.nextId, path, pos, kind: like.kind, len: like.len, wid: like.wid, color: like.color, vBase: like.vBase, v: like.v,
         x: 0, y: 0, h: 0, wreck: null, brake: false, flash: 0,
       };
       this.place(c);

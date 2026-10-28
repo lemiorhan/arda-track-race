@@ -33,6 +33,9 @@
     volume: 0.7,
     shake: true,
     autoPause: true,
+    onlineName: 'Oyuncu',
+    onlineAssist: 'hafif',
+    onlineView: 'tek',
   };
   let settings = Object.assign({}, DEFAULTS, TR.Store.load('settings', {}));
 

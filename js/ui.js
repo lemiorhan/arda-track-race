@@ -1,11 +1,12 @@
 'use strict';
 (function () {
-  const TR = window.TR, U = TR.U, G = TR.Game;
+  const TR = window.TR, U = TR.U, G = TR.Game, ON = TR.Online;
   const $ = (id) => document.getElementById(id);
-  const SCREENS = ['title', 'setup', 'routes', 'howto', 'settings', 'scores', 'pause', 'roundResult', 'matchResult'];
+  const SCREENS = ['title', 'online', 'setup', 'routes', 'howto', 'settings', 'scores', 'pause', 'roundResult', 'matchResult'];
   const SUB = ['howto', 'settings', 'scores'];
   const RESULT_LOCK_MS = 1200;
-  // Player names are typed by the user and end up in innerHTML.
+  // Names are typed by users, and an online guest fills its result screens from what the host sends; all of
+  // it ends up in innerHTML.
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
   const UI = (TR.UI = { current: null, returnTo: 'title', lockT: 0, picks: [0, 0], ready: [false, false], confirmYes: null });
@@ -14,6 +15,8 @@
     // A control left focused (a checkbox in settings, say) would react to the players' Space/Enter.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     for (const s of SCREENS) $(s).classList.toggle('hidden', s !== id);
+    document.body.classList.toggle('guest', ON.role === 'guest');
+    document.body.classList.toggle('net', !!ON.role);
     UI.current = id;
     UI.lockT = performance.now() + (id === 'roundResult' || id === 'matchResult' ? RESULT_LOCK_MS : 150);
   }
@@ -29,8 +32,10 @@
   function back() {
     const c = UI.current;
     if (SUB.includes(c)) return show(UI.returnTo || 'title');
+    if (c === 'online' || (c === 'setup' && ON.role)) return toTitle();
     if (c === 'setup') return show('title');
     if (c === 'routes') {
+      if (ON.role === 'guest') return confirmBox('Online maçtan çıkılsın mı?', toTitle);
       if (G.series && G.series.history.length) return confirmBox('Maçtan çıkılsın mı? Bu maçın toplam puanı kaybolur.', toTitle);
       return openSetup();
     }
@@ -38,7 +43,9 @@
     if (c === 'matchResult') return toTitle();
   }
 
+  // Leaving any screen for the title also ends an online match, for the other machine too.
   function toTitle() {
+    ON.leave(null);
     G.toMenu();
     show('title');
   }
@@ -62,6 +69,11 @@
     $(id).querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === value));
   }
 
+  const clean = (v, d) => (v || '').trim().slice(0, 14) || d;
+  const assistName = (id) => (TR.ASSIST_LEVELS.find((l) => l.id === id) || { name: id }).name;
+
+  // Online, the players' names and assists come from each one's online screen, so the host's setup shows
+  // only the match settings.
   function openSetup() {
     const s = TR.Settings.get();
     $('name1').value = s.names[0];
@@ -71,17 +83,107 @@
     segSet('segWeather', s.weather);
     segSet('segAssist1', s.assist[0]);
     segSet('segAssist2', s.assist[1]);
+    const net = ON.role === 'host';
+    $('setup').classList.toggle('online', net);
+    $('setupOnline').classList.toggle('hidden', !net);
+    if (net) {
+      $('setupOnline').innerHTML = '<b>Mavi:</b> ' + esc(s.onlineName) + ' · yardım ' + esc(assistName(s.onlineAssist)) +
+        ' &nbsp; <b>Kırmızı:</b> ' + esc(ON.peer.name) + ' · yardım ' + esc(assistName(ON.peer.assist));
+      ON.share('wait', { text: s.onlineName + ' maç ayarlarını yapıyor…' });
+    }
     show('setup');
   }
 
   function startMatch() {
-    const clean = (v, d) => (v || '').trim().slice(0, 14) || d;
-    TR.Settings.set({ names: [clean($('name1').value, 'Mavi Tır'), clean($('name2').value, 'Kırmızı Tır')] });
-    $('name1').blur();
-    $('name2').blur();
-    G.newSeries();
+    const s = TR.Settings.get();
+    if (ON.role === 'host') G.newSeries([s.onlineName, ON.peer.name], [s.onlineAssist, ON.peer.assist]);
+    else {
+      TR.Settings.set({ names: [clean($('name1').value, 'Mavi Tır'), clean($('name2').value, 'Kırmızı Tır')] });
+      $('name1').blur();
+      $('name2').blur();
+      G.newSeries();
+    }
     openRoutes();
   }
+
+  // ---------- online ----------
+  function openOnline() {
+    const s = TR.Settings.get();
+    $('onlineName').value = s.onlineName;
+    segSet('segAssistOnline', s.onlineAssist);
+    const ok = TR.Net.available();
+    $('btnHost').disabled = !ok;
+    $('btnJoin').disabled = !ok;
+    UI.onlineStatus(ok ? ON.status : 'Bağlantı kütüphanesi yüklenemedi. Online maç için internet bağlantısı gerekir.');
+    show('online');
+  }
+
+  function saveOnlineName() {
+    TR.Settings.set({ onlineName: clean($('onlineName').value, 'Oyuncu') });
+  }
+
+  function hostRoom() {
+    saveOnlineName();
+    ON.host();
+  }
+
+  function joinRoom() {
+    saveOnlineName();
+    ON.join($('onlineCode').value);
+  }
+
+  UI.onlineStatus = (text) => {
+    $('onlineStatus').textContent = text || '';
+  };
+
+  UI.onlineGuestJoined = () => openSetup();
+
+  UI.onlineLeft = (why) => {
+    $('confirm').classList.add('hidden');
+    G.toMenu();
+    ON.status = '';
+    openOnline();
+    UI.onlineStatus(why);
+  };
+
+  UI.netWait = (text) => {
+    $('netwait').classList.toggle('hidden', text == null);
+    if (text != null) $('netwaitText').textContent = text;
+  };
+
+  UI.mirrorWait = () => {
+    if (UI.current !== 'online') openOnline();
+  };
+
+  UI.remotePick = (i) => {
+    if (UI.current !== 'routes' || UI.ready[1]) return;
+    UI.picks[1] = i;
+    refreshRoutes();
+  };
+
+  UI.mirrorRoutes = (picks, ready) => {
+    if (UI.current !== 'routes') openRoutes();
+    UI.picks = picks;
+    UI.ready = ready;
+    refreshRoutes();
+  };
+
+  // A guest back from a dropped link or a reload is shown the result screen again, which it may or may not
+  // have seen and recorded before; it keeps the results it has recorded, across reloads.
+  function firstSight(key) {
+    const seen = TR.Store.load('netSeen', []);
+    if (seen.includes(key)) return false;
+    TR.Store.save('netSeen', [key].concat(seen).slice(0, 20));
+    return true;
+  }
+
+  UI.mirrorRoundResult = (scores, titles) => {
+    ON.applyLatest();
+    const fresh = firstSight(G.series.id + ':' + G.series.history.length);
+    UI.showRoundResult(scores, fresh ? G.recordRound(scores) : scores.map(() => -1), titles);
+  };
+
+  UI.mirrorMatchResult = () => showMatchResult(!firstSight(G.series.id + ':match'));
 
   // ---------- route select ----------
   // "Tünel ×2 · Köprü", in the order the route meets them.
@@ -109,10 +211,12 @@
         U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '') + '</div>' +
         (r.features && r.features.length ? '<div class="route-feats">' + featureList(r) + '</div>' : '') +
         '<div class="picks"><span class="pk p1">1</span><span class="pk p2">2</span></div>';
+      // Online, a click picks for the player at this machine only.
       el.addEventListener('click', () => {
         TR.Audio.unlock();
+        if (ON.ask('pick', { i })) return;
         if (!UI.ready[0]) UI.picks[0] = i;
-        if (!UI.ready[1]) UI.picks[1] = i;
+        if (!UI.ready[1] && !ON.role) UI.picks[1] = i;
         refreshRoutes();
       });
       box.appendChild(el);
@@ -141,12 +245,14 @@
     });
     $('ready1').classList.toggle('on', UI.ready[0]);
     $('ready2').classList.toggle('on', UI.ready[1]);
-    $('ready1').textContent = UI.ready[0] ? 'HAZIR ✔' : 'Hazır mısın? (Space)';
-    $('ready2').textContent = UI.ready[1] ? 'HAZIR ✔' : 'Hazır mısın? (Enter)';
+    const keys = ON.role ? ['Space / Enter', 'Space / Enter'] : ['Space', 'Enter'];
+    $('ready1').textContent = UI.ready[0] ? 'HAZIR ✔' : 'Hazır mısın? (' + keys[0] + ')';
+    $('ready2').textContent = UI.ready[1] ? 'HAZIR ✔' : 'Hazır mısın? (' + keys[1] + ')';
     $('pickNote').textContent = UI.picks[0] === UI.picks[1]
       ? 'İki oyuncu da aynı rotayı seçti.'
       : 'Farklı rotalar seçildi: ikiniz de hazır olunca yazı-tura atılacak.';
-    G.previewIdx = UI.picks[0];
+    G.previewIdx = UI.picks[ON.meIdx()];
+    ON.share('routes', { picks: UI.picks, ready: UI.ready });
   }
 
   function routesInput() {
@@ -187,16 +293,16 @@
     const seg = (a, b) => (a != null && b != null ? U.fmtTime(a - b) : '—');
     $('rrBody').innerHTML = G.players.map((p, i) => {
       const sc = scores[i], t = p.times;
-      const rows = sc.items.map((it) => '<tr><td>' + it.label + '</td><td class="' + (it.pts < 0 ? 'neg' : 'pos') + '">' +
-        (it.pts > 0 ? '+' : '') + it.pts + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">Puan yok</td></tr>';
+      const rows = sc.items.map((it) => '<tr><td>' + esc(it.label) + '</td><td class="' + (it.pts < 0 ? 'neg' : 'pos') + '">' +
+        (it.pts > 0 ? '+' : '') + Number(it.pts) + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">Puan yok</td></tr>';
       const floor = sc.sum < 0 ? '<div class="muted small">Tur puanı 0\'ın altına düşmez.</div>' : '';
       const place = places[i] >= 0 ? '<div class="badge">🏅 Rekor listesinde ' + (places[i] + 1) + '. sıra</div>' : '';
-      const mult = sc.mult > 1 ? '<tr><td>Final turu ×' + sc.mult + '</td><td class="pos">+' + (sc.total - sc.base) + '</td></tr>' : '';
-      const chips = titles[i].map((t) => '<span class="title-chip">' + t + '</span>').join('');
-      return '<div class="rr-col" style="--pc:' + p.color + '"><h3>' + esc(p.name) + (p === w ? ' 🏆' : '') + '</h3>' +
+      const mult = sc.mult > 1 ? '<tr><td>Final turu ×' + Number(sc.mult) + '</td><td class="pos">+' + (sc.total - sc.base) + '</td></tr>' : '';
+      const chips = titles[i].map((t) => '<span class="title-chip">' + esc(t) + '</span>').join('');
+      return '<div class="rr-col" style="--pc:' + esc(p.color) + '"><h3>' + esc(p.name) + (p === w ? ' 🏆' : '') + '</h3>' +
         (chips ? '<div class="titles">' + chips + '</div>' : '') +
-        '<table class="score">' + rows + mult + '<tr class="sum"><td>Tur puanı</td><td>' + sc.total + '</td></tr>' +
-        '<tr class="sum total"><td>Maç toplamı</td><td>' + sr.totals[i] + '</td></tr></table>' + floor +
+        '<table class="score">' + rows + mult + '<tr class="sum"><td>Tur puanı</td><td>' + Number(sc.total) + '</td></tr>' +
+        '<tr class="sum total"><td>Maç toplamı</td><td>' + Number(sr.totals[i]) + '</td></tr></table>' + floor +
         '<div class="times">Yarış ' + U.fmtTime(t.race) + ' · Park ' + seg(t.park, t.race) + ' · Boşaltma ' + seg(t.unload, t.park) + '</div>' +
         place + '</div>';
     }).join('');
@@ -209,24 +315,25 @@
     else openRoutes();
   }
 
-  function showMatchResult() {
+  function showMatchResult(recorded) {
     const sr = G.series;
     const [a, b] = sr.totals;
     const champ = a === b ? -1 : a > b ? 0 : 1;
     $('mrTitle').textContent = champ < 0 ? 'BERABERE!' : sr.names[champ].toUpperCase() + ' ŞAMPİYON!';
     $('mrTitle').style.color = champ < 0 ? '#fff' : ['#1e88e5', '#e53935'][champ];
     $('mrTotals').innerHTML =
-      '<div class="tot p1"><span>' + esc(sr.names[0]) + '</span><b>' + a + '</b><small>' + sr.wins[0] + ' tur</small></div>' +
+      '<div class="tot p1"><span>' + esc(sr.names[0]) + '</span><b>' + Number(a) + '</b><small>' + Number(sr.wins[0]) + ' tur</small></div>' +
       '<div class="vs">–</div>' +
-      '<div class="tot p2"><span>' + esc(sr.names[1]) + '</span><b>' + b + '</b><small>' + sr.wins[1] + ' tur</small></div>';
+      '<div class="tot p2"><span>' + esc(sr.names[1]) + '</span><b>' + Number(b) + '</b><small>' + Number(sr.wins[1]) + ' tur</small></div>';
     $('mrHead1').textContent = sr.names[0];
     $('mrHead2').textContent = sr.names[1];
     $('mrBody').innerHTML = sr.history.map((h, k) =>
-      '<tr><td>' + (k + 1) + '</td><td>' + h.route + '</td><td>' + h.scores[0] + '</td><td>' + h.scores[1] + '</td><td>' +
+      '<tr><td>' + (k + 1) + '</td><td>' + esc(h.route) + '</td><td>' + Number(h.scores[0]) + '</td><td>' + Number(h.scores[1]) + '</td><td>' +
       esc(sr.names[h.winner]) + ' · ' + U.fmtTime(h.time) + '</td></tr>').join('');
-    TR.Scores.addMatch({ date: Date.now(), names: sr.names.slice(), totals: sr.totals.slice(), champ, rounds: sr.rounds });
+    if (!recorded) TR.Scores.addMatch({ date: Date.now(), names: sr.names.slice(), totals: sr.totals.slice(), champ, rounds: sr.rounds });
     G.state = 'matchover';
     show('matchResult');
+    ON.share('matchResult');
   }
 
   function rematch() {
@@ -247,6 +354,7 @@
     $('setVolume').value = Math.round(s.volume * 100);
     $('setShake').checked = s.shake;
     $('setAutoPause').checked = s.autoPause;
+    segSet('segOnlineView', s.onlineView);
   }
 
   function fillScores() {
@@ -297,20 +405,25 @@
       return;
     }
     if (performance.now() < UI.lockT) return;
+    // A guest's route keys reach the host as its input; the host moves the match on.
+    const guest = ON.role === 'guest';
     if (c === 'routes') {
       if (I.wasHit(['Escape'])) back();
-      else routesInput();
+      else if (!guest) routesInput();
     } else if (c === 'pause') {
       if (I.wasHit(['Escape', 'KeyP'])) G.resume();
     } else if (c === 'title') {
       if (I.wasHit(enter)) openSetup();
+    } else if (c === 'online') {
+      if (I.wasHit(enter) && TR.Net.cleanCode($('onlineCode').value).length === TR.Net.CODE_LEN) joinRoom();
+      else if (I.wasHit(['Escape'])) back();
     } else if (c === 'setup') {
       if (I.wasHit(enter)) startMatch();
       else if (I.wasHit(['Escape'])) back();
     } else if (c === 'roundResult') {
-      if (I.wasHit(enter.concat('Space'))) nextFromRound();
+      if (!guest && I.wasHit(enter.concat('Space'))) nextFromRound();
     } else if (c === 'matchResult') {
-      if (I.wasHit(enter.concat('Space'))) rematch();
+      if (!guest && I.wasHit(enter.concat('Space'))) rematch();
       else if (I.wasHit(['Escape'])) toTitle();
     } else if (I.wasHit(['Escape'])) back();
   };
@@ -320,8 +433,13 @@
     applySettings();
     buildRoutes();
     fillHowto();
+    const go = { setup: openSetup, online: openOnline };
     document.querySelectorAll('[data-go]').forEach((b) =>
-      b.addEventListener('click', () => (b.dataset.go === 'setup' ? openSetup() : openSub(b.dataset.go))));
+      b.addEventListener('click', () => (go[b.dataset.go] ? go[b.dataset.go]() : openSub(b.dataset.go))));
+    $('btnHost').addEventListener('click', hostRoom);
+    $('btnJoin').addEventListener('click', joinRoom);
+    $('onlineName').addEventListener('change', saveOnlineName);
+    $('btnNetLeave').addEventListener('click', toTitle);
     document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', back));
     document.querySelectorAll('.seg').forEach((seg) =>
       seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {

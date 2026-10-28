@@ -136,25 +136,36 @@
   window.addEventListener('keyup', (e) => down.delete(e.code));
   window.addEventListener('blur', () => down.clear());
 
+  const endFrameHooks = [];
   TR.Input = {
     isDown: (codes) => codes.some((c) => down.has(c)),
     wasHit: (codes) => codes.some((c) => hit.has(c)),
-    endFrame: () => hit.clear(),
+    endFrame: () => {
+      hit.clear();
+      for (const f of endFrameHooks) f();
+    },
+    onEndFrame: (f) => endFrameHooks.push(f),
+    // A function per player that replaces the keyboard for them; online.js sets these.
+    sources: [null, null],
     player(i) {
-      const k = TR.KEYS[i];
-      const up = this.isDown(k.up), dn = this.isDown(k.down);
-      const lf = this.isDown(k.left), rt = this.isDown(k.right);
+      return this.sources[i] ? this.sources[i]() : this.keys([TR.KEYS[i]]);
+    },
+    // The input of one player who drives with any of several key maps at once.
+    keys(maps) {
+      const any = (f, name) => maps.some((k) => f(k[name]));
+      const held = (name) => any(this.isDown, name), tap = (name) => any(this.wasHit, name);
+      const up = held('up'), dn = held('down'), lf = held('left'), rt = held('right');
       return {
         thr: (up ? 1 : 0) - (dn ? 1 : 0),
         steer: (rt ? 1 : 0) - (lf ? 1 : 0),
         mx: (rt ? 1 : 0) - (lf ? 1 : 0),
         my: (dn ? 1 : 0) - (up ? 1 : 0),
-        action: this.wasHit(k.action),
-        reset: this.wasHit(k.reset),
-        brake: this.isDown(k.brake),
-        horn: this.wasHit(k.horn),
-        left: this.wasHit(k.left),
-        right: this.wasHit(k.right),
+        action: tap('action'),
+        reset: tap('reset'),
+        brake: held('brake'),
+        horn: tap('horn'),
+        left: tap('left'),
+        right: tap('right'),
       };
     },
   };

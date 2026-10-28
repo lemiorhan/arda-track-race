@@ -328,5 +328,21 @@
     });
   }
 
-  TR.HUD = { draw };
+  // With only one truck on screen, a line under the clock tells where the other one is.
+  function drawRival(ctx, vp, p, g) {
+    if (g.state === 'countdown') return;
+    const o = g.players[1 - p.idx];
+    const where = o.phase === 'race' ? '%' + Math.round(U.clamp(o.s / g.road.length, 0, 1) * 100) : PHASE[o.phase];
+    const s = o.name + ' · ' + where + ' · ' + g.rankOf(o) + '.';
+    ctx.font = '800 13px ' + FONT;
+    const w = ctx.measureText(s).width + 34, cx = Math.max(vp.x + vp.w / 2, vp.x + 390), y = vp.y + 74;
+    panel(ctx, cx - w / 2, y, w, 24);
+    ctx.fillStyle = o.color;
+    ctx.beginPath();
+    ctx.arc(cx - w / 2 + 14, y + 12, 5, 0, 6.283);
+    ctx.fill();
+    text(ctx, s, cx + 7, y + 12, 13, '#eceff1', 'center', '800');
+  }
+
+  TR.HUD = { draw, drawRival };
 })();

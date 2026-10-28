@@ -14,19 +14,20 @@
   const pool = Array.from({ length: FX_MAX }, () => ({ t: 0 }));
   let next = 0;
 
-  function emit(kind, x, y, vx, vy, color) {
+  function emit(kind, x, y, vx, vy, color, rot) {
     const q = pool[next];
     next = (next + 1) % FX_MAX;
     const k = KINDS[kind];
     q.k = k; q.x = x; q.y = y; q.vx = vx || 0; q.vy = vy || 0; q.t = k.life;
     q.color = color || k.color;
-    q.rot = Math.random() * 6.283;
+    q.rot = rot == null ? Math.random() * 6.283 : rot;
   }
 
+  // Goes through FX.emit, so an online host that wraps it sees every particle (online.js).
   function burst(kind, n, x, y, speed, color) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.283, v = speed * (0.3 + Math.random() * 0.7);
-      emit(kind, x, y, Math.cos(a) * v, Math.sin(a) * v, color);
+      FX.emit(kind, x, y, Math.cos(a) * v, Math.sin(a) * v, color);
     }
   }
 
@@ -75,8 +76,9 @@
     }
   }
 
-  TR.FX = {
+  const FX = (TR.FX = {
     reset: () => pool.forEach((q) => (q.t = 0)),
+    alive: () => pool.filter((q) => q.t > 0).length,
     emit, burst, update, draw, drawSnow,
-  };
+  });
 })();

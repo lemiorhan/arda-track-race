@@ -282,3 +282,12 @@ table.score tr.total td { color: var(--gold); font-size: 20px; }
 #pause, #roundResult, #matchResult { background: rgba(8, 10, 14, 0.78); }
 .overlay.modal { z-index: 10; background: rgba(8, 10, 14, 0.65); }
 .confirm-text { font-size: 18px; font-weight: 700; margin: 0 0 6px; }
+
+/* Online match */
+.note.hidden { display: none; }
+#setup.online .field.p1, #setup.online .field.p2 { display: none; }
+#setupOnline { color: var(--text); }
+.online-status { min-height: 1.4em; font-weight: 700; color: var(--gold); }
+body.guest .host-only { display: none; }
+body:not(.guest) .guest-only { display: none; }
+#netwait { z-index: 11; }

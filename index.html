@@ -16,6 +16,7 @@
       <p class="sub">İki tır, tek yol. Yarış, geri geri park et, kutuları doğru diz.</p>
       <div class="menu-buttons">
         <button data-go="setup" class="primary big">Yeni Maç</button>
+        <button data-go="online" class="big">Online Maç</button>
         <button data-go="howto" class="big">Nasıl Oynanır</button>
         <button data-go="settings" class="big">Ayarlar</button>
         <button data-go="scores" class="big">Skor Tablosu</button>
@@ -24,10 +25,33 @@
     </div>
   </div>
 
+  <!-- Online maç -->
+  <div id="online" class="overlay hidden">
+    <div class="card narrow">
+      <h1>Online Maç</h1>
+      <p class="sub">İki ayrı bilgisayarda oynayın. Biriniz oda kurar, öbürünüz oda koduyla katılır.</p>
+      <div class="form">
+        <label class="field"><span>Adın</span><input id="onlineName" type="text" maxlength="14" autocomplete="off"></label>
+        <div class="field sub-field"><span>Sürüş yardımı</span>
+          <div class="seg" id="segAssistOnline" data-key="onlineAssist"><button data-v="kapali">Kapalı</button><button data-v="hafif">Hafif</button><button data-v="tam">Tam</button></div>
+        </div>
+        <label class="field"><span>Oda kodu (katılmak için)</span><input id="onlineCode" type="text" maxlength="5" autocomplete="off" placeholder="ABCDE"></label>
+      </div>
+      <p id="onlineStatus" class="note online-status"></p>
+      <p class="note">Odayı kuran <b>Mavi</b>, katılan <b>Kırmızı</b> tırı sürer. İkiniz de <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> ya da ok tuşlarını kullanabilirsiniz.</p>
+      <div class="actions">
+        <button id="btnHost" class="primary">Oda kur</button>
+        <button id="btnJoin">Odaya katıl</button>
+        <button data-back>Geri (Esc)</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Yeni maç ayarları -->
   <div id="setup" class="overlay hidden">
     <div class="card narrow">
       <h1>Yeni Maç</h1>
+      <p id="setupOnline" class="note hidden"></p>
       <div class="form">
         <label class="field p1"><span><i class="dot"></i>Oyuncu 1 · Mavi</span><input id="name1" type="text" maxlength="14" autocomplete="off"></label>
         <div class="field p1 sub-field"><span>Sürüş yardımı</span>
@@ -82,7 +106,7 @@
         </div>
       </div>
       <div class="actions">
-        <button id="btnRouteStart" class="primary">Hemen başla</button>
+        <button id="btnRouteStart" class="primary host-only">Hemen başla</button>
         <button data-go="howto">Nasıl Oynanır</button>
         <button data-back>Geri (Esc)</button>
       </div>
@@ -141,6 +165,9 @@
         <label class="field"><span>Ses seviyesi</span><input id="setVolume" type="range" min="0" max="100" step="5"></label>
         <label class="toggle"><input id="setShake" type="checkbox"><span>Kazada ekran sallansın</span></label>
         <label class="toggle"><input id="setAutoPause" type="checkbox"><span>Pencereden çıkınca duraklat</span></label>
+        <div class="field"><span>Online maçta ekran</span>
+          <div class="seg" id="segOnlineView" data-key="onlineView"><button data-v="tek">Sadece benim tırım</button><button data-v="bolunmus">İki tır, bölünmüş</button></div>
+        </div>
         <div class="field"><span>Görüntü</span><button id="btnFullscreen">Tam ekran aç / kapat (F)</button></div>
       </div>
       <p class="note">Ayarlar bu tarayıcıda saklanır.</p>
@@ -175,7 +202,7 @@
       <h1>DURAKLATILDI</h1>
       <div class="menu-buttons">
         <button id="btnResume" class="primary big">Devam (Esc)</button>
-        <button id="btnRestart" class="big">Turu yeniden başlat</button>
+        <button id="btnRestart" class="big host-only">Turu yeniden başlat</button>
         <button data-go="howto" class="big">Nasıl Oynanır</button>
         <button data-go="settings" class="big">Ayarlar</button>
         <button id="btnPauseMenu" class="big danger">Ana menü</button>
@@ -189,7 +216,7 @@
       <h1 id="rrTitle" class="center"></h1>
       <p id="rrSub" class="sub center"></p>
       <div id="rrBody" class="rr-grid"></div>
-      <div class="actions center"><button id="btnNext" class="primary"></button></div>
+      <div class="actions center"><button id="btnNext" class="primary host-only"></button><p class="note guest-only">Odayı kuran oyuncu devam ettirecek.</p></div>
     </div>
   </div>
 
@@ -203,7 +230,7 @@
         <tbody id="mrBody"></tbody>
       </table>
       <div class="actions center">
-        <button id="btnRematch" class="primary">Rövanş (Enter)</button>
+        <button id="btnRematch" class="primary host-only">Rövanş (Enter)</button>
         <button id="btnMatchMenu">Ana menü (Esc)</button>
       </div>
     </div>
@@ -220,6 +247,16 @@
     </div>
   </div>
 
+  <!-- Bağlantı koptu -->
+  <div id="netwait" class="overlay modal hidden">
+    <div class="card small">
+      <p id="netwaitText" class="confirm-text"></p>
+      <div class="actions center"><button id="btnNetLeave" class="danger">Ana menü</button></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"
+    integrity="sha512-XEKeWX+mI3Ov+tg2evDlVQFzVOIp4T8J3cNcCEPaEUGpxJV3eZaN8rHuvnFPvQpGJBHPmrozJDMpm2xcDvtmyQ==" crossorigin="anonymous"></script>
   <script src="js/util.js"></script>
   <script src="js/store.js"></script>
   <script src="js/audio.js"></script>
@@ -235,6 +272,8 @@
   <script src="js/score.js"></script>
   <script src="js/boxes.js"></script>
   <script src="js/hud.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/online.js"></script>
   <script src="js/game.js"></script>
   <script src="js/ui.js"></script>
 </body>
