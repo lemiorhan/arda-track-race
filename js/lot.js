@@ -38,6 +38,7 @@
       });
       this.doors = this.bays.map((b) => ({ x: b.cx, y: oy - H - WALL / 2 }));
       this.warehouse = A(-W - WALL, WH_TOP, W + WALL, -H - WALL);
+      this.bounds = A(-W - WALL, WH_TOP, W + WALL, WALL);
       this.floors = [
         A(-W + 4, WH_TOP + 54, -18, -H - WALL - 10),
         A(18, WH_TOP + 54, W - 4, -H - WALL - 10),
@@ -46,7 +47,8 @@
     }
 
     contains(x, y) {
-      return x > this.ox - W - WALL && x < this.ox + W + WALL && y > this.oy + WH_TOP && y < this.oy + WALL;
+      const b = this.bounds;
+      return x > b.x0 && x < b.x1 && y > b.y0 && y < b.y1;
     }
 
     entrance() {

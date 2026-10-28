@@ -15,13 +15,32 @@
   // target[dir], so the last racer is not flooded once the other leaves. A surplus is never
   // removed, and a window stays short while every POOL car is awake.
   const WIN_BACK = 200, WIN_AHEAD = 2800, WINDOW_SHARE = 0.3, POOL = 2.4;
+  // A truck and an oncoming car, each in its own inner lane, pass 22 to 26 apart (LANE - TR_HW - the
+  // car's half width), so GAP sits below that: only a truck drifting over the centre line earns it.
+  const NEAR = { GAP: 12, MIN_V: 150 };
+  const DIRT_SLOW = 0.6;
+  // A car keeps to a speed from which it stops PAD short of where the car ahead could stop, planning with
+  // DECEL, a little under the braking update() gives it. laneFree leaves room to brake at DECEL too. YAW is
+  // the most place()'s lane-change yaw swings a car's corners out sideways.
+  const FOLLOW = { DECEL: 180, PAD: 12, YAW: 12 };
+
+  // The fastest a car may go gap behind o (front to rear).
+  const followV = (o, gap) => Math.sqrt((o.wreck ? 0 : o.v * o.v) + 2 * FOLLOW.DECEL * Math.max(0, gap - FOLLOW.PAD));
+
+  // Whether o, where it is or in the lane it is moving to, is side by side with a car c at lane offset d.
+  function inLaneOf(o, c, d) {
+    const w = (o.wid + c.wid) / 2 + FOLLOW.YAW;
+    return Math.abs(o.d - d) < w || Math.abs(o.dTarget - d) < w;
+  }
 
   class Traffic {
-    constructor(road, route, seed, density) {
+    constructor(road, route, seed, density, events) {
       this.road = road;
+      this.events = events;
       this.rnd = U.rng(seed);
       this.onSpeed = route.onSpeed || 1;
       this.cars = [];
+      this.ghosts = [];
       const L = road.length - NO_TRAFFIC_TAIL;
       const count = { 1: Math.round(route.same * density), '-1': Math.round(route.oncoming * density) };
       this.target = { 1: Math.max(1, Math.round(count[1] * WINDOW_SHARE)), '-1': Math.max(1, Math.round(count[-1] * WINDOW_SHARE)) };
@@ -33,7 +52,8 @@
           if (k < t) {
             this.setS(c, Math.min(L, s0 + ((k + 0.5 * this.rnd()) * span) / t));
             if (!this.laneFree(c, c.d, 120, 120)) { c.lane = 1 - c.lane; this.setS(c, c.s); }
-          } else { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
+          }
+          if (k >= t || !events.spawnOk(c)) { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
           this.cars.push(c);
         }
       }
@@ -62,6 +82,7 @@
         d: dir * (lane === 0 ? LANE / 2 : LANE * 1.5), dTarget: 0,
         s: 0, v: vBase, vBase, x: 0, y: 0, h: 0,
         laneT: r.range(3, 9), wreck: null, honked: false, flash: 0, brake: false, dormant: 0,
+        near: [Infinity, Infinity], nearDone: [false, false],
       };
     }
 
@@ -77,30 +98,37 @@
     }
 
     place(c) {
-      const p = this.road.posAt(c.s, c.d);
+      const p = this.road.lanePos(c.s, c.d);
       c.x = p.x; c.y = p.y;
       const yaw = U.clamp((c.dTarget - c.d) * 0.012, -0.25, 0.25) * c.dir;
       c.h = p.h + (c.dir < 0 ? Math.PI : 0) + yaw;
     }
 
-    box(c) {
-      return U.obb(c.x, c.y, c.len / 2, c.wid / 2, c.h);
-    }
-
+    // Whether lane d has no car of c's direction from behindGap behind c to aheadGap ahead, counting the
+    // junctions' ghosts (Junctions.ghosts). The gaps are world lengths, so they take more s on the inside of a
+    // bend (Road.stretchAt); each grows by the s the faster of the two needs to brake to the other's speed at
+    // FOLLOW.DECEL.
     laneFree(c, d, aheadGap, behindGap) {
-      for (const o of this.cars) {
-        if (o === c || o.wreck || o.dormant > 0 || o.dir !== c.dir) continue;
-        if (Math.abs(o.d - d) > 30 && Math.abs(o.dTarget - d) > 30) continue;
-        const rel = (o.s - c.s) * c.dir;
-        if (rel > -behindGap && rel < aheadGap) return false;
+      for (const o of this.cars.concat(this.ghosts)) {
+        if (o === c || o.wreck || o.dormant > 0 || o.dir !== c.dir || !inLaneOf(o, c, d)) continue;
+        const k = Math.min(this.road.stretchAt(c.s, d), this.road.stretchAt(o.s, d));
+        const rel = (o.s - c.s) * c.dir, close = (c.v * c.v - o.v * o.v) / (2 * FOLLOW.DECEL);
+        if (rel > -behindGap / k + Math.min(0, close) && rel < aheadGap / k + Math.max(0, close)) return false;
       }
       return true;
     }
 
-    update(dt, players, views, onHonk) {
+    // Whether lane d ahead of a car has no roadworks closing it.
+    open(c, d) {
+      return this.events.shutAhead(c.dir, d, c.s, c.len / 2) === Infinity;
+    }
+
+    update(dt, players, views, onHonk, junctions) {
       const racers = players.filter((p) => p.phase === 'race');
       const minS = racers.length ? Math.min(...racers.map((p) => p.s)) : Infinity;
       const tail = this.road.length - NO_TRAFFIC_TAIL;
+      this.ghosts = junctions.ghosts();
+      const ahead = this.cars.concat(this.ghosts);
       for (const c of this.cars) {
         if (c.dormant > 0) {
           c.dormant -= dt;
@@ -108,21 +136,31 @@
           continue;
         }
         if (c.wreck) {
-          const w = c.wreck;
-          c.x += w.vx * dt; c.y += w.vy * dt; c.h += w.spin * dt;
-          const f = Math.exp(-dt * 2.2);
-          w.vx *= f; w.vy *= f; w.spin *= f;
-          w.t -= dt;
-          if (w.t <= 0) this.respawn(c, racers, views);
+          if (moveWreck(c, dt)) this.respawn(c, racers, views);
           continue;
         }
-        let target = c.vBase;
+        let target = Math.min(c.vBase * (this.road.dirtAt(c.s) ? DIRT_SLOW : 1), junctions.carLimit(c), this.events.carLimit(c));
         c.brake = false;
-        for (const o of this.cars) {
-          if (o === c || o.dir !== c.dir || o.dormant > 0) continue;
-          if (Math.abs(o.d - c.d) > 30) continue;
-          const gap = (o.s - c.s) * c.dir - (o.len + c.len) / 2;
-          if (gap > -5 && gap < 110) target = Math.min(target, o.wreck ? 0 : gap < 30 ? o.v * 0.6 : o.v);
+        const shut = this.events.shutAhead(c.dir, c.dTarget, c.s, c.len / 2);
+        if (shut < Infinity) {
+          const other = c.lane === 0 ? 1 : 0;
+          const nd = c.dir * (other === 0 ? LANE / 2 : LANE * 1.5);
+          const truckThere = players.some((p) => Math.abs(p.d - nd) < 45 && Math.abs(p.s - c.s) < 260);
+          if (c.dTarget === c.d && !truckThere && this.laneFree(c, nd, 140, 100)) {
+            c.lane = other;
+            c.dTarget = nd;
+          } else target = Math.min(target, Math.sqrt(2 * TR.Events.DECEL * Math.max(0, shut)));
+        }
+        // A car moving into c's lane counts from when it commits to it (dTarget), not from when it gets there.
+        // Gaps are in s; car lengths are world lengths, so they take more s on the inside of a bend.
+        const kc = this.road.stretchAt(c.s, c.d);
+        for (const o of ahead) {
+          if (o === c || o.dir !== c.dir || o.dormant > 0 || !inLaneOf(o, c, c.d)) continue;
+          const k = Math.min(kc, this.road.stretchAt(o.s, c.d));
+          const gap = (o.s - c.s) * c.dir - (o.len + c.len) / (2 * k);
+          if (gap <= -5) continue;
+          target = Math.min(target, followV(o, gap));
+          if (gap < 110) target = Math.min(target, o.wreck ? 0 : gap < 30 ? o.v * 0.6 : o.v);
         }
         for (const p of players) {
           const t = p.truck;
@@ -139,7 +177,7 @@
               const other = c.lane === 0 ? 1 : 0;
               const nd = c.dir * (other === 0 ? LANE / 2 : LANE * 1.5);
               const truckThere = players.some((q) => Math.abs(q.d - nd) < 45 && Math.abs(q.s - c.s) < 400);
-              if (c.dTarget === c.d && !truckThere && this.laneFree(c, nd, 140, 100)) {
+              if (c.dTarget === c.d && !truckThere && this.laneFree(c, nd, 140, 100) && this.open(c, nd)) {
                 c.lane = other;
                 c.dTarget = nd;
               } else {
@@ -160,7 +198,7 @@
             const other = c.lane === 0 ? 1 : 0;
             const nd = c.dir * (other === 0 ? LANE / 2 : LANE * 1.5);
             const truckNear = players.some((p) => Math.abs(p.s - c.s) < 260 && Math.abs(p.d - nd) < 50);
-            if (this.rnd() < 0.45 && !truckNear && this.laneFree(c, nd, 160, 120)) {
+            if (this.rnd() < 0.45 && !truckNear && this.laneFree(c, nd, 160, 120) && this.open(c, nd)) {
               c.lane = other;
               c.dTarget = nd;
             }
@@ -192,42 +230,80 @@
           c.dTarget = c.d;
           this.place(c);
           const seen = views.some((v) => c.x > v.x0 - 120 && c.x < v.x1 + 120 && c.y > v.y0 - 120 && c.y < v.y1 + 120);
-          if (!seen && this.laneFree(c, c.d, 220, 220)) return;
+          if (!seen && this.laneFree(c, c.d, 220, 220) && this.events.spawnOk(c)) return;
         }
       }
       c.dormant = 0.8;
       c.x = 1e9; c.y = 1e9;
     }
 
-    // Returns hits as {player, car, headOn}.
     collide(players) {
-      const hits = [];
+      return collideCars(this.cars, players);
+    }
+
+    // Puts a sleeping car of direction dir in the outer lane at s, looking and moving like `from`, a car
+    // that leaves a side road. Returns null when every car of that direction is awake.
+    adopt(dir, s, from) {
+      const c = this.cars.find((o) => o.dir === dir && o.dormant > 0);
+      if (!c) return null;
+      Object.assign(c, this.makeCar(dir), { kind: from.kind, len: from.len, wid: from.wid, color: from.color, lane: 1 });
+      this.setS(c, s);
+      c.v = from.v;
+      return c;
+    }
+
+    hasSleeper(dir) {
+      return this.cars.some((o) => o.dir === dir && o.dormant > 0);
+    }
+
+    // Takes a car off the road, for one that turned into a side road; it respawns like any other.
+    retire(c) {
+      c.dormant = this.rnd.range(0.5, 1.5);
+      c.x = 1e9; c.y = 1e9;
+    }
+
+    // An oncoming car that ran alongside a truck doing over NEAR.MIN_V within NEAR.GAP is a near miss
+    // for that player once it clears the trailer unhurt; a car that hits the truck turns into a wreck
+    // first and is skipped. Returns the players to credit, at most once per car each.
+    nearMisses(players) {
+      const T = TR.TRUCK, hw = Math.max(T.CAB_HW, T.TR_HW), tail = T.LT + T.TR_REAR;
+      const out = [];
       for (const c of this.cars) {
-        if (c.dormant > 0 || c.wreck) continue;
-        const cb = this.box(c);
+        if (c.dir > 0 || c.dormant > 0 || c.wreck) continue;
         for (const p of players) {
-          if (p.phase !== 'race') continue;
-          const t = p.truck;
-          if (Math.abs(c.x - t.x) > 260 || Math.abs(c.y - t.y) > 260) continue;
-          for (const tb of t.boxes()) {
-            const m = U.sat(tb, cb);
-            if (!m) continue;
-            const tvx = Math.cos(t.th) * t.v, tvy = Math.sin(t.th) * t.v;
-            const cvx = Math.cos(c.h) * c.v, cvy = Math.sin(c.h) * c.v;
-            c.wreck = {
-              vx: tvx * 0.6 + cvx * 0.2 + m.nx * 140,
-              vy: tvy * 0.6 + cvy * 0.2 + m.ny * 140,
-              spin: (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 4),
-              t: 3.5,
-            };
-            c.v = 0;
-            hits.push({ player: p, car: c, headOn: c.dir < 0 });
-            break;
+          if (p.phase !== 'race' || c.nearDone[p.idx]) continue;
+          const rel = c.s - p.s;
+          if (rel > T.CAB_FRONT + c.len / 2) continue;
+          if (rel > -tail - c.len / 2) {
+            if (p.truck.v > NEAR.MIN_V) c.near[p.idx] = Math.min(c.near[p.idx], Math.abs(c.d - p.d) - c.wid / 2 - hw);
+            continue;
           }
-          if (c.wreck) break;
+          c.nearDone[p.idx] = true;
+          if (c.near[p.idx] < NEAR.GAP) out.push(p);
         }
       }
-      return hits;
+      return out;
+    }
+
+    // The first car ahead of the truck in its lane and direction within range moves over, if the
+    // other lane has room. Returns whether one did.
+    yieldTo(p, players, range) {
+      let best = null, bestRel = range;
+      for (const c of this.cars) {
+        if (c.dir < 0 || c.dormant > 0 || c.wreck || c.dTarget !== c.d) continue;
+        if (Math.abs(c.d - p.d) > 30) continue;
+        const rel = c.s - p.s - TR.TRUCK.CAB_FRONT;
+        if (rel > 0 && rel < bestRel) { best = c; bestRel = rel; }
+      }
+      if (!best) return false;
+      const other = best.lane === 0 ? 1 : 0;
+      const nd = other === 0 ? LANE / 2 : LANE * 1.5;
+      const truckThere = players.some((q) => Math.abs(q.s - best.s) < 260 && Math.abs(q.d - nd) < 50);
+      if (truckThere || !this.laneFree(best, nd, 160, 120) || !this.open(best, nd)) return false;
+      best.lane = other;
+      best.dTarget = nd;
+      best.laneT = this.rnd.range(4, 10);
+      return true;
     }
 
     draw(ctx, view) {
@@ -237,6 +313,47 @@
         drawCar(ctx, c);
       }
     }
+  }
+
+  // Returns hits as {player, car, headOn}. A car that hits a truck turns into a wreck.
+  function collideCars(cars, players) {
+    const hits = [];
+    for (const c of cars) {
+      if (c.dormant > 0 || c.wreck) continue;
+      const cb = U.obb(c.x, c.y, c.len / 2, c.wid / 2, c.h);
+      for (const p of players) {
+        if (p.phase !== 'race') continue;
+        const t = p.truck;
+        if (Math.abs(c.x - t.x) > 260 || Math.abs(c.y - t.y) > 260) continue;
+        for (const tb of t.boxes()) {
+          const m = U.sat(tb, cb);
+          if (!m) continue;
+          const tvx = Math.cos(t.th) * t.v, tvy = Math.sin(t.th) * t.v;
+          const cvx = Math.cos(c.h) * c.v, cvy = Math.sin(c.h) * c.v;
+          c.wreck = {
+            vx: tvx * 0.6 + cvx * 0.2 + m.nx * 140,
+            vy: tvy * 0.6 + cvy * 0.2 + m.ny * 140,
+            spin: (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 4),
+            t: 3.5,
+          };
+          c.v = 0;
+          hits.push({ player: p, car: c, headOn: Math.cos(U.wrap(c.h - t.th)) < -0.5 });
+          break;
+        }
+        if (c.wreck) break;
+      }
+    }
+    return hits;
+  }
+
+  // Slides and spins a wreck to a stop; true once it has lain long enough to be cleared away.
+  function moveWreck(c, dt) {
+    const w = c.wreck;
+    c.x += w.vx * dt; c.y += w.vy * dt; c.h += w.spin * dt;
+    const f = Math.exp(-dt * 2.2);
+    w.vx *= f; w.vy *= f; w.spin *= f;
+    w.t -= dt;
+    return w.t <= 0;
   }
 
   function drawCar(ctx, c) {
@@ -295,5 +412,7 @@
     ctx.restore();
   }
 
+  // Side-road traffic (junctions.js) moves its own cars and shares how they follow, crash, wreck and look.
+  Object.assign(Traffic, { followV, inLaneOf, collideCars, moveWreck, drawCar });
   TR.Traffic = Traffic;
 })();

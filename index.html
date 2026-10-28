@@ -30,15 +30,26 @@
       <h1>Yeni Maç</h1>
       <div class="form">
         <label class="field p1"><span><i class="dot"></i>Oyuncu 1 · Mavi</span><input id="name1" type="text" maxlength="14" autocomplete="off"></label>
+        <div class="field p1 sub-field"><span>Sürüş yardımı</span>
+          <div class="seg" id="segAssist1" data-key="assist" data-idx="0"><button data-v="kapali">Kapalı</button><button data-v="hafif">Hafif</button><button data-v="tam">Tam</button></div>
+        </div>
         <label class="field p2"><span><i class="dot"></i>Oyuncu 2 · Kırmızı</span><input id="name2" type="text" maxlength="14" autocomplete="off"></label>
+        <div class="field p2 sub-field"><span>Sürüş yardımı</span>
+          <div class="seg" id="segAssist2" data-key="assist" data-idx="1"><button data-v="kapali">Kapalı</button><button data-v="hafif">Hafif</button><button data-v="tam">Tam</button></div>
+        </div>
         <div class="field"><span>Tur sayısı</span>
           <div class="seg" id="segRounds" data-key="rounds"><button data-v="1">1</button><button data-v="3">3</button><button data-v="5">5</button></div>
         </div>
         <div class="field"><span>Trafik</span>
           <div class="seg" id="segTraffic" data-key="traffic"><button data-v="az">Az</button><button data-v="normal">Normal</button><button data-v="yogun">Yoğun</button></div>
         </div>
+        <div class="field"><span>Hava</span>
+          <div class="seg" id="segWeather" data-key="weather"><button data-v="gunduz">Gündüz</button><button data-v="karisik">Karışık</button></div>
+        </div>
       </div>
       <p class="note">Her turun sonunda puanlar toplanır. Maçın sonunda toplam puanı yüksek olan şampiyon olur.</p>
+      <p class="note">Hava · <b>Karışık</b> seçilirse her tur gündüz, gece ya da sis olabilir. İki oyuncu aynı havada sürer.</p>
+      <p class="note">Sürüş yardımı · <b>Hafif</b>: keskin virajdan önce "yavaşla" uyarısı, geri giderken dorsenin gideceği yol. <b>Tam</b>: bunlara ek olarak tır virajdan önce kendiliğinden yavaşlar.</p>
       <div class="actions">
         <button id="btnSetupGo" class="primary">Rota seçimine geç (Enter)</button>
         <button data-back>Geri (Esc)</button>
@@ -85,8 +96,19 @@
       <p class="sub">Her tur üç aşamadan oluşur. Kutuları ilk doğru dizen turu kazanır.</p>
       <div class="phases">
         <div class="phase"><b>1 · Yarış</b><p>Yolda yavaş araçlar ve karşıdan gelen trafik var. Sollamak için gerekirse karşı şeride geçin ama kafa kafaya çarpmayın. Kaza tırı birkaç saniye durdurur. Yoldan çıkınca tır yavaşlar. Her rotanın kendi zorluğu var: Çöl Yolu'nda karşı trafik hızlı, Karlı Geçit'te yol buzlu, Dağ Geçidi'nde bazı virajlar tam gazla dönülmez.</p></div>
-        <div class="phase"><b>2 · Park</b><p>Park alanında kendi renginizdeki bölmeye dorseyi <b>geri geri</b> yanaştırın. Dorse düz olmalı, tamamen bölmenin içinde kalmalı ve rampaya dayanmalı. Geri giderken direksiyonu az kırın. Dorse çok kırılırsa makas atar, o zaman biraz ileri gidip düzeltin.</p></div>
+        <div class="phase"><b>2 · Park</b><p>Park alanında kendi renginizdeki bölmeye dorseyi <b>geri geri</b> yanaştırın. Dorse düz olmalı, tamamen bölmenin içinde kalmalı ve rampaya dayanmalı. Geri giderken direksiyonu az kırın. Dorse çok kırılırsa makas atar, o zaman biraz ileri gidip düzeltin. Paneldeki <b>Makas açısı</b> çubuğu kırmızıya yaklaşıyorsa direksiyonu geri alın. Sürüş yardımı açıksa geri giderken dorsenin gideceği yol mavi çizgiyle görünür, makas atacaksa çizgi kırmızı olur.</p></div>
         <div class="phase"><b>3 · Boşaltma</b><p>İşçiyle dorsenin kapısından kutuları alıp hedef alana taşıyın. Ekrandaki <b>Hedef Dizilim</b> paneli kutuların hangi yığında, hangi sırayla duracağını gösterir: bazen yan yana, bazen üst üste. Dorseden önce kapıya en yakın kutu çıkar. Gereken kutu içerideyse öndekileri yere bırakın ya da kapıdan dorseye geri koyun.</p></div>
+      </div>
+      <div class="phases">
+        <div class="phase"><b>Köprü, toprak yol, tünel</b><p>Köprüde bariyerler asfalta yaklaşır, kenarda payınız yoktur. Toprak yolda tır kayar, geç durur ve az döner. Tünel karanlıktır: önünüzü farlarınız ve tavan lambaları aydınlatır. Yol kenarındaki tabela kesimden önce uyarır.</p></div>
+        <div class="phase"><b>Kavşak ve döner kavşak</b><p>Dört yol ağzında trafik ışığına uyun: kırmızıda geçmek ceza yazar, yan yoldan gelen araç da size çarpabilir. Döner kavşakta şeritler adanın etrafından dolaşır. Ada sert bir engeldir. Uzun dorse içe kaçar, iç şeritte adaya sürtünür: yavaşlayıp dış şeritten dönün.</p></div>
+        <div class="phase"><b>Radar ve gişe</b><p>Radar tabelasındaki hızın üstünde direğin önünden geçerseniz ceza yazılır. Gişeye tabeladaki hızın altında yaklaşırsanız kol kalkar. Hızlı gelirseniz kolu kırarsınız: tır bir an sersemler ve temas cezası yazılır.</p></div>
+        <div class="phase"><b>Koyun sürüsü ve yol çalışması</b><p>Yerleri her tur değişir, iki oyuncu da aynılarıyla karşılaşır. Koyun tabelasını görünce yavaşlayın: siz yaklaşınca sürü yolu geçer. Sürüye değerseniz tır sert yavaşlar ve bir an sersemler, ceza yazılmaz. Yol çalışmasında bir şerit dubalarla kapalıdır. Dubaya çarpmak temas cezası yazar.</p></div>
+        <div class="phase"><b>Rüzgâr tüneli</b><p>Yarışta rakip tırın hemen arkasında, aynı şeritte kalırsanız tırınız rüzgârsız kalır ve en yüksek hızınız yavaş yavaş artar. Şeritten çıkınca etki birkaç saniyede söner.</p></div>
+        <div class="phase"><b>Son şans</b><p>Rakip turu bitirdiğinde siz park alanındaysanız kısa bir süre daha oynarsınız. Bu sürede yerleştirdiğiniz kutular puan getirir. Turu kazanan değişmez.</p></div>
+        <div class="phase"><b>Kıl payı ve korna</b><p>Hızlıyken karşıdan gelen bir araca çarpmadan çok yakın geçerseniz kıl payı puanı alırsınız. Önünüzdeki yavaş araca korna çalın: yan şerit boşsa kenara çekilir.</p></div>
+        <div class="phase"><b>Tur kontratı</b><p>Her tur iki oyuncuya aynı yan görev verilir, örneğin "Hiç kaza yapma". Görevi bozmadan park ederseniz tur sonunda kontrat puanı alırsınız. Bozulan görev o tur geri gelmez.</p></div>
+        <div class="phase"><b>Final ve unvanlar</b><p>Maç birden çok turluysa son turun puanı katlanır. Her tur sonunda <b>Park Ustası</b>, <b>Kaza Kralı</b>, <b>Kıl Payı Kralı</b> ve <b>Temiz Sürücü</b> unvanları dağıtılır. Unvanlar puanı değiştirmez.</p></div>
       </div>
       <h2>Tuşlar</h2>
       <table class="keys">
@@ -94,6 +116,8 @@
         <tbody>
           <tr><td>Gaz / ileri yürü</td><td><kbd>W</kbd></td><td><kbd>↑</kbd></td></tr>
           <tr><td>Fren, geri vites / geri yürü</td><td><kbd>S</kbd></td><td><kbd>↓</kbd></td></tr>
+          <tr><td>Motor freni (sert yavaşlatır, geri vitese geçmez)</td><td><kbd>Space</kbd></td><td><kbd>Sağ Option</kbd> / <kbd>Alt Gr</kbd></td></tr>
+          <tr><td>Korna (önündeki araç yan şerit boşsa kenara çekilir)</td><td><kbd>E</kbd></td><td><kbd>Enter</kbd></td></tr>
           <tr><td>Direksiyon / yana yürü</td><td><kbd>A</kbd> <kbd>D</kbd></td><td><kbd>←</kbd> <kbd>→</kbd></td></tr>
           <tr><td>Kutu al / bırak</td><td><kbd>Space</kbd> veya <kbd>E</kbd></td><td><kbd>Enter</kbd></td></tr>
           <tr><td>Kurtarma (yola / park girişine dön)</td><td><kbd>Q</kbd></td><td><kbd>Sağ Shift</kbd></td></tr>
@@ -201,7 +225,12 @@
   <script src="js/audio.js"></script>
   <script src="js/road.js"></script>
   <script src="js/truck.js"></script>
+  <script src="js/assist.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/light.js"></script>
   <script src="js/traffic.js"></script>
+  <script src="js/junctions.js"></script>
+  <script src="js/events.js"></script>
   <script src="js/lot.js"></script>
   <script src="js/score.js"></script>
   <script src="js/boxes.js"></script>

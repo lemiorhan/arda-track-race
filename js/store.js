@@ -27,6 +27,8 @@
     names: ['Mavi Tır', 'Kırmızı Tır'],
     rounds: 3,
     traffic: 'normal',
+    weather: 'gunduz',
+    assist: ['hafif', 'hafif'],
     sound: true,
     volume: 0.7,
     shake: true,

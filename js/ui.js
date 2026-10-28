@@ -68,6 +68,9 @@
     $('name2').value = s.names[1];
     segSet('segRounds', String(s.rounds));
     segSet('segTraffic', s.traffic);
+    segSet('segWeather', s.weather);
+    segSet('segAssist1', s.assist[0]);
+    segSet('segAssist2', s.assist[1]);
     show('setup');
   }
 
@@ -81,6 +84,17 @@
   }
 
   // ---------- route select ----------
+  // "Tünel ×2 · Köprü", in the order the route meets them.
+  function featureList(r) {
+    const seen = [];
+    for (const f of r.features) {
+      const name = TR.featureName(f), e = seen.find((x) => x.name === name);
+      if (e) e.n++;
+      else seen.push({ name, n: 1 });
+    }
+    return seen.map((x) => x.name + (x.n > 1 ? ' ×' + x.n : '')).join(' · ');
+  }
+
   function buildRoutes() {
     const box = $('routeCards');
     TR.ROUTES.forEach((r, i) => {
@@ -93,6 +107,7 @@
         '<b>' + '●'.repeat(r.level) + '</b>' + '●'.repeat(5 - r.level) + '</div><p>' + r.desc + '</p>' +
         '<div class="route-meta">' + (r.length / 10000).toFixed(1).replace('.', ',') + ' km · par ' +
         U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '') + '</div>' +
+        (r.features && r.features.length ? '<div class="route-feats">' + featureList(r) + '</div>' : '') +
         '<div class="picks"><span class="pk p1">1</span><span class="pk p2">2</span></div>';
       el.addEventListener('click', () => {
         TR.Audio.unlock();
@@ -108,7 +123,8 @@
     G.state = 'menu';
     UI.ready = [false, false];
     const sr = G.series;
-    $('standRound').textContent = 'Tur ' + (sr.history.length + 1) + ' / ' + sr.rounds;
+    const next = sr.history.length + 1;
+    $('standRound').textContent = 'Tur ' + next + ' / ' + sr.rounds + (TR.isFinalRound(sr, next) ? ' · FİNAL, puanlar ×' + TR.SCORE_RULES.finalMult : '');
     $('standP1').textContent = sr.names[0] + '  ' + sr.totals[0];
     $('standP2').textContent = sr.totals[1] + '  ' + sr.names[1];
     $('routesName1').textContent = sr.names[0];
@@ -163,7 +179,7 @@
   // ---------- results ----------
   UI.showPause = () => show('pause');
 
-  UI.showRoundResult = (scores, places) => {
+  UI.showRoundResult = (scores, places, titles) => {
     const sr = G.series, w = G.winner;
     $('rrTitle').textContent = w.name.toUpperCase() + ' TURU KAZANDI!';
     $('rrTitle').style.color = w.color;
@@ -175,8 +191,11 @@
         (it.pts > 0 ? '+' : '') + it.pts + '</td></tr>').join('') || '<tr><td colspan="2" class="muted">Puan yok</td></tr>';
       const floor = sc.sum < 0 ? '<div class="muted small">Tur puanı 0\'ın altına düşmez.</div>' : '';
       const place = places[i] >= 0 ? '<div class="badge">🏅 Rekor listesinde ' + (places[i] + 1) + '. sıra</div>' : '';
+      const mult = sc.mult > 1 ? '<tr><td>Final turu ×' + sc.mult + '</td><td class="pos">+' + (sc.total - sc.base) + '</td></tr>' : '';
+      const chips = titles[i].map((t) => '<span class="title-chip">' + t + '</span>').join('');
       return '<div class="rr-col" style="--pc:' + p.color + '"><h3>' + esc(p.name) + (p === w ? ' 🏆' : '') + '</h3>' +
-        '<table class="score">' + rows + '<tr class="sum"><td>Tur puanı</td><td>' + sc.total + '</td></tr>' +
+        (chips ? '<div class="titles">' + chips + '</div>' : '') +
+        '<table class="score">' + rows + mult + '<tr class="sum"><td>Tur puanı</td><td>' + sc.total + '</td></tr>' +
         '<tr class="sum total"><td>Maç toplamı</td><td>' + sr.totals[i] + '</td></tr></table>' + floor +
         '<div class="times">Yarış ' + U.fmtTime(t.race) + ' · Park ' + seg(t.park, t.race) + ' · Boşaltma ' + seg(t.unload, t.park) + '</div>' +
         place + '</div>';
@@ -233,9 +252,13 @@
   function fillScores() {
     const day = (t) => new Date(t).toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const rounds = TR.Scores.rounds();
+    const assistTag = (id) => {
+      const lv = TR.ASSIST_LEVELS.find((l) => l.id === id);
+      return lv && lv.id !== 'kapali' ? ' <span class="tag">yardım: ' + lv.name + '</span>' : '';
+    };
     $('hiBody').innerHTML = rounds.length
       ? rounds.map((r, k) => '<tr><td>' + (k + 1) + '</td><td><span class="dot" style="--pc:' + esc(r.color) + '"></span>' + esc(r.name) +
-        '</td><td>' + esc(r.route) + '</td><td><b>' + Number(r.score) + '</b></td><td>' + day(r.date) + '</td></tr>').join('')
+        assistTag(r.assist) + '</td><td>' + esc(r.route) + '</td><td><b>' + Number(r.score) + '</b></td><td>' + day(r.date) + '</td></tr>').join('')
       : '<tr><td colspan="5" class="muted">Henüz kayıtlı tur yok.</td></tr>';
     const matches = TR.Scores.matches();
     $('matchBody').innerHTML = matches.length
@@ -302,7 +325,13 @@
     document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', back));
     document.querySelectorAll('.seg').forEach((seg) =>
       seg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
-        const v = seg.dataset.key === 'rounds' ? +b.dataset.v : b.dataset.v;
+        let v = seg.dataset.key === 'rounds' ? +b.dataset.v : b.dataset.v;
+        // A seg with data-idx sets one player's entry of a per-player list.
+        if (seg.dataset.idx != null) {
+          const list = TR.Settings.get()[seg.dataset.key].slice();
+          list[+seg.dataset.idx] = v;
+          v = list;
+        }
         TR.Settings.set({ [seg.dataset.key]: v });
         segSet(seg.id, b.dataset.v);
       })));

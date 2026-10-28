@@ -112,11 +112,13 @@
   };
 
   // ---------- input ----------
+  // brake and horn share keys with action: action only matters while unloading, brake and horn only while driving.
   TR.KEYS = [
-    { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], action: ['Space', 'KeyE'], reset: ['KeyQ'] },
+    { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], action: ['Space', 'KeyE'], reset: ['KeyQ'], brake: ['Space'], horn: ['KeyE'] },
     {
       up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
-      action: ['Enter', 'NumpadEnter', 'Numpad0'], reset: ['ShiftRight', 'Backspace'],
+      action: ['Enter', 'NumpadEnter', 'Numpad0'], reset: ['ShiftRight', 'Backspace'], brake: ['AltRight', 'Numpad0'],
+      horn: ['Enter', 'NumpadEnter'],
     },
   ];
   const GAME_KEYS = new Set(['Escape', 'KeyP', 'KeyF']);
@@ -149,6 +151,8 @@
         my: (dn ? 1 : 0) - (up ? 1 : 0),
         action: this.wasHit(k.action),
         reset: this.wasHit(k.reset),
+        brake: this.isDown(k.brake),
+        horn: this.wasHit(k.horn),
         left: this.wasHit(k.left),
         right: this.wasHit(k.right),
       };

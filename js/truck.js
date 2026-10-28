@@ -8,7 +8,7 @@
     WB: 34, CAB_FRONT: 46, CAB_REAR: -16, CAB_HW: 17,
     LT: 96, TR_FRONT: 12, TR_REAR: 24, TR_HW: 18,
     MAX_FWD: 265, MAX_REV: 55, LOT_CAP: 95, OFFROAD_CAP: 110,
-    ACC: 120, BRAKE: 330, REV_ACC: 75, DRAG: 30,
+    ACC: 120, BRAKE: 330, HARD_BRAKE: 460, REV_ACC: 75, DRAG: 30,
     LAT: 230, STEER_MAX: 0.62, JACK: 1.35,
   });
 
@@ -28,11 +28,12 @@
     }
 
     update(dt, inp, cap) {
-      let thr = inp.thr, st = inp.steer;
+      let thr = inp.thr, st = inp.steer, hard = !!inp.brake;
       if (this.stun > 0) {
         this.stun -= dt;
         thr = 0;
         st = 0;
+        hard = false;
       }
       if (this.jack > 0) this.jack -= dt;
       const back = st === 0 || Math.sign(st) !== Math.sign(this.steer);
@@ -40,7 +41,11 @@
 
       let v = this.v;
       this.braking = false;
-      if (thr > 0) {
+      if (hard) {
+        // The engine brake only ever slows the truck down: unlike S it never shifts into reverse.
+        v = U.approach(v, 0, T.HARD_BRAKE * this.grip * dt);
+        this.braking = true;
+      } else if (thr > 0) {
         if (v < -1) { v = Math.min(0, v + T.BRAKE * this.grip * dt); this.braking = true; }
         else v += T.ACC * (1.1 - 0.8 * Math.max(0, v) / T.MAX_FWD) * dt;
       } else if (thr < 0) {

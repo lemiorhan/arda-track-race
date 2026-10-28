@@ -5,6 +5,14 @@
   const ctx = canvas.getContext('2d');
   const COLORS = ['#1e88e5', '#e53935'];
   const DENSITY = { az: 0.6, normal: 1, yogun: 1.4 };
+  // After the winner finishes, a rival already in the lot gets LAST_CHANCE seconds to finish too; the
+  // round otherwise closes END_DELAY after the last finisher.
+  const LAST_CHANCE = 20, END_DELAY = 2.4;
+  // Slipstream: within DIST behind the other truck's trailer and LANE of its line, the top speed rises by
+  // up to BOOST, building over RISE seconds and fading over FALL.
+  const DRAFT = { DIST: 380, LANE: 30, BOOST: 0.12, RISE: 1.2, FALL: 2.5, MIN_V: 120 };
+  // The horn moves the first same-direction car within RANGE ahead; it works again after CD seconds.
+  const HORN = { RANGE: 420, CD: 2.5 };
 
   const G = (TR.Game = {
     state: 'menu', route: null, road: null, lot: null, traffic: null, plan: null,
@@ -28,7 +36,7 @@
   // ---------- match and rounds ----------
   G.newSeries = () => {
     const s = TR.Settings.get();
-    G.series = { rounds: s.rounds, round: 1, names: s.names.slice(), totals: [0, 0], wins: [0, 0], history: [] };
+    G.series = { rounds: s.rounds, round: 1, names: s.names.slice(), assist: s.assist.slice(), totals: [0, 0], wins: [0, 0], history: [] };
   };
 
   G.isLastRound = () => G.series.history.length >= G.series.rounds;
@@ -40,19 +48,25 @@
     G.routeIdx = ri;
     G.route = route;
     G.road = new TR.Road(route);
+    TR.Assist.prepare(G.road);
     G.lot = new TR.Lot(G.road.endX, G.road.endY);
     const seed = ((Date.now() & 0xffffff) ^ route.seed) >>> 0;
-    G.traffic = new TR.Traffic(G.road, route, seed, DENSITY[TR.Settings.get().traffic] || 1);
+    G.events = new TR.Events(G.road, seed * 23 + 7);
+    G.traffic = new TR.Traffic(G.road, route, seed, DENSITY[TR.Settings.get().traffic] || 1, G.events);
+    G.junctions = new TR.Junctions(G.road, G.traffic, seed * 19 + 11);
     G.plan = TR.makeCargoPlan(U.rng(seed * 7 + 3));
+    G.contract = U.rng(seed * 13 + 5).pick(TR.CONTRACTS);
+    G.weather = TR.Settings.get().weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
     G.players = COLORS.map((color, i) => {
       const lane = i === 0 ? R.LANE / 2 : R.LANE * 1.5;
       const q = G.road.posAt(R.START_S, lane);
       const truck = new TR.Truck(i, color, q.x, q.y, q.h);
       truck.grip = route.grip || 1;
       return {
-        idx: i, name: sr.names[i], color, truck,
+        idx: i, name: sr.names[i], color, truck, assist: sr.assist[i],
         phase: 'race', s: R.START_S, d: lane, hint: -1, offroad: false,
-        crashes: 0, bumps: 0, resets: 0, bumpCd: 0, railCd: 0,
+        inp: null, autoT: 0, draft: 0, hornCd: 0, nearMisses: 0, redLights: 0, speeding: 0, flashT: 0, redAhead: Infinity,
+        crashes: 0, bumps: 0, resets: 0, bumpCd: 0, railCd: 0, skidD: 0,
         stats: { firstToLot: false, parkPts: null },
         cam: { x: q.x, y: q.y - 250, z: 0.8 }, shake: 0,
         toast: '', toastT: 0, toastColor: '#fff',
@@ -66,7 +80,9 @@
     G.state = 'countdown';
     G.winner = null;
     G.firstLot = null;
+    G.lastChance = false;
     G.touchCd = 0;
+    TR.FX.reset();
   };
 
   G.restartRound = () => G.startRound(G.routeIdx);
@@ -91,15 +107,16 @@
 
   function endRound() {
     const sr = G.series;
-    const scores = G.players.map((p) => TR.roundScore(p, G));
+    const scores = G.players.map((p) => TR.roundScore(p, G, true));
     scores.forEach((sc, i) => (sr.totals[i] += sc.total));
     sr.wins[G.winner.idx]++;
     sr.history.push({ route: G.route.name, scores: scores.map((sc) => sc.total), winner: G.winner.idx, time: G.winner.times.unload });
-    const places = G.players.map((p, i) => scores[i].total > 0
-      ? TR.Scores.addRound({ name: p.name, color: p.color, route: G.route.name, score: scores[i].total, date: Date.now() })
+    // The records list keeps the round's own score, before the final round's multiplier.
+    const places = G.players.map((p, i) => scores[i].base > 0
+      ? TR.Scores.addRound({ name: p.name, color: p.color, route: G.route.name, score: scores[i].base, date: Date.now(), assist: p.assist })
       : -1);
     G.state = 'roundover';
-    TR.UI.showRoundResult(scores, places);
+    TR.UI.showRoundResult(scores, places, TR.roundTitles(G.players));
   }
 
   function toast(p, text, color, t) {
@@ -128,19 +145,30 @@
     for (const p of G.players) updatePlayer(p, dt);
     collideTrucks(dt);
     for (const p of G.players) postPhysics(p, dt);
+    for (const p of G.players) emitFx(p, dt);
+    TR.FX.update(dt);
     const views = viewports().map((vp, i) => viewOf(G.players[i], vp));
-    G.traffic.update(dt, G.players, views, () => TR.Audio.horn());
-    for (const h of G.traffic.collide(G.players)) crash(h.player, h.headOn);
+    for (const e of G.junctions.update(dt, G.players, G.time)) junctionEvent(e);
+    for (const e of G.events.update(dt, G.players, G.traffic)) roadEvent(e);
+    G.traffic.update(dt, G.players, views, () => TR.Audio.horn(), G.junctions);
+    for (const h of G.traffic.collide(G.players).concat(G.junctions.collide(G.players))) crash(h.player, h.headOn, h.car);
+    for (const p of G.traffic.nearMisses(G.players)) nearMiss(p);
     updateCams(dt);
     if (G.state === 'finishing') {
       G.overT -= dt;
+      const n = Math.ceil(G.overT);
+      if (G.lastChance && n < G.lastBeep && n <= 5 && n > 0) { G.lastBeep = n; TR.Audio.beep(); }
       if (G.overT <= 0) endRound();
     }
   }
 
   function updatePlayer(p, dt) {
-    const inp = TR.Input.player(p.idx);
+    let inp = TR.Input.player(p.idx);
+    p.inp = inp;
     if (p.toastT > 0) p.toastT -= dt;
+    if (p.autoT > 0) p.autoT -= dt;
+    if (p.hornCd > 0) p.hornCd -= dt;
+    if (p.flashT > 0) p.flashT -= dt;
     if (p.shake > 0) p.shake = Math.max(0, p.shake - dt * 2.5);
     p.bumpCd -= dt;
     p.railCd -= dt;
@@ -149,10 +177,23 @@
       const loc = G.road.locate(p.truck.x, p.truck.y, p.hint);
       p.hint = loc.i;
       p.s = loc.s;
-      p.d = loc.d;
-      p.offroad = p.phase === 'race' && Math.abs(loc.d) > R.HALF + 4 && loc.s < G.road.length;
-      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD;
+      p.d = G.road.laneD(loc.s, loc.d);
+      if (inp.horn && p.hornCd <= 0) {
+        p.hornCd = HORN.CD;
+        TR.Audio.truckHorn();
+        G.traffic.yieldTo(p, G.players, HORN.RANGE);
+      }
+      p.offroad = p.phase === 'race' && Math.abs(p.d) > R.HALF + 4 && loc.s < G.road.length && !G.junctions.onSide(p.truck.x, p.truck.y);
+      p.redAhead = p.phase === 'race' ? G.junctions.stopAhead(p) : Infinity;
+      updateDraft(p, dt);
+      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + DRAFT.BOOST * p.draft);
+      if (p.phase === 'race' && p.assist === 'tam' && !inp.brake) {
+        const auto = TR.Assist.autoBrake(G.road, p, inp, p.redAhead);
+        if (auto.thr < 0 && inp.thr >= 0) p.autoT = 0.5;
+        inp = auto;
+      }
       const jacked = p.truck.jack > 0;
+      p.truck.grip = (G.route.grip || 1) * (p.phase === 'race' ? G.road.gripAt(p.s) : 1);
       p.truck.update(dt, inp, cap);
       if (!jacked && p.truck.jack > 0) TR.Audio.jack();
     } else if (p.phase === 'unload') {
@@ -161,6 +202,16 @@
     } else if (p.phase === 'done' && p.unloader) {
       p.unloader.update(dt, { mx: inp.mx, my: inp.my, action: false });
     }
+  }
+
+  // The other truck's s is its rear axle; its trailer ends LT + TR_REAR behind that, and this truck's
+  // nose sits CAB_FRONT ahead of its own.
+  function updateDraft(p, dt) {
+    const o = G.players[1 - p.idx];
+    const gap = o.s - p.s - (T.LT + T.TR_REAR + T.CAB_FRONT);
+    const inZone = p.phase === 'race' && o.phase === 'race' && !p.offroad && p.truck.v > DRAFT.MIN_V &&
+      gap > 0 && gap < DRAFT.DIST && Math.abs(o.d - p.d) < DRAFT.LANE;
+    p.draft = inZone ? Math.min(1, p.draft + dt / DRAFT.RISE) : Math.max(0, p.draft - dt / DRAFT.FALL);
   }
 
   function postPhysics(p, dt) {
@@ -195,19 +246,24 @@
     const t = p.truck, road = G.road;
     // All corners come from one snapshot of the truck, so only the deepest may push:
     // adding up every corner's overshoot would move the truck several times too far.
+    // A junction sets its own bounds (side roads, a ring's island); elsewhere the barrier runs along the road.
     let worst = null;
     for (const b of t.boxes()) {
       for (const c of U.corners(b)) {
         if (G.lot.contains(c.x, c.y)) continue;
-        const loc = road.locate(c.x, c.y, p.hint);
-        if (loc.s >= road.length - 2) continue;
-        const over = Math.abs(loc.d) - R.RAIL;
-        if (over > 0 && (!worst || over > worst.over)) worst = { over, i: loc.i, sg: Math.sign(loc.d) };
+        let push = G.junctions.limit(c.x, c.y);
+        if (push === undefined) {
+          const loc = road.locate(c.x, c.y, p.hint);
+          if (loc.s >= road.length - 2) continue;
+          const sg = Math.sign(loc.d);
+          push = { over: Math.abs(loc.d) - road.railAt(loc.s), nx: -road.nx[loc.i] * sg, ny: -road.ny[loc.i] * sg };
+        }
+        if (push && push.over > 0 && (!worst || push.over > worst.over)) worst = push;
       }
     }
     if (worst) {
-      t.x -= road.nx[worst.i] * worst.sg * worst.over;
-      t.y -= road.ny[worst.i] * worst.sg * worst.over;
+      t.x += worst.nx * worst.over;
+      t.y += worst.ny * worst.over;
       t.v *= Math.pow(0.35, dt);
       if (p.railCd <= 0) {
         p.railCd = 0.6;
@@ -261,7 +317,9 @@
     }
   }
 
-  function crash(p, headOn) {
+  function crash(p, headOn, car) {
+    TR.FX.burst('spark', 18, car.x, car.y, 260);
+    TR.FX.burst('debris', 8, car.x, car.y, 160, car.color);
     if (p.truck.stun > 0.3) return;
     p.crashes++;
     p.truck.v = headOn ? 0 : Math.min(p.truck.v, 40);
@@ -271,12 +329,83 @@
     toast(p, (headOn ? 'KAFA KAFAYA! ' : 'KAZA! ') + RULES.crash, '#ff5252');
   }
 
+  // Wheel positions come from the trailer axle, LT behind the hitch along the trailer's heading.
+  function emitFx(p, dt) {
+    if (p.phase !== 'race' && p.phase !== 'park') return;
+    const t = p.truck, c = Math.cos(t.th), s = Math.sin(t.th);
+    if (p.inp && p.inp.thr > 0 && Math.random() < 20 * dt) {
+      const x = t.x + c * 6 + s * (T.CAB_HW - 3), y = t.y + s * 6 - c * (T.CAB_HW - 3);
+      TR.FX.emit('exhaust', x, y, -c * 30 + (Math.random() - 0.5) * 20, -s * 30 + (Math.random() - 0.5) * 20);
+    }
+    const fast = Math.abs(t.v) > 40;
+    const pc = Math.cos(t.phi), ps = Math.sin(t.phi), hw = T.TR_HW * 0.8;
+    const wheels = [-1, 1].map((k) => ({ x: t.x - pc * T.LT + ps * k * hw, y: t.y - ps * T.LT - pc * k * hw }));
+    const dirt = p.phase === 'race' && G.road.dirtAt(p.s);
+    if ((p.offroad || dirt) && fast && Math.random() < 30 * dt) {
+      const dust = G.road.theme.shoulder || '#a58f6a';
+      for (const w of wheels) TR.FX.emit('dust', w.x, w.y, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, dust);
+    }
+    if ((G.route.grip || 1) < 1 && t.braking && fast) {
+      p.skidD += Math.abs(t.v) * dt;
+      if (p.skidD > 8) {
+        p.skidD = 0;
+        for (const w of wheels) TR.FX.emit('skid', w.x, w.y);
+      }
+    }
+  }
+
+  function junctionEvent(e) {
+    const p = e.p;
+    if (e.type === 'red') {
+      p.redLights++;
+      TR.Audio.fine();
+      toast(p, 'KIRMIZIDA GEÇTİN! ' + RULES.redLight, '#ff8a80', 1.4);
+    } else if (e.type === 'radar') {
+      p.speeding++;
+      p.flashT = e.flash;
+      TR.Audio.fine();
+      toast(p, 'RADARA YAKALANDIN! ' + RULES.speeding, '#ff8a80', 1.4);
+    } else {
+      const t = p.truck;
+      p.bumps++;
+      t.stun = Math.max(t.stun, e.stun);
+      p.shake = Math.max(p.shake, 0.5);
+      TR.FX.burst('debris', 10, t.x + Math.cos(t.th) * T.CAB_FRONT, t.y + Math.sin(t.th) * T.CAB_FRONT, 180, '#e53935');
+      TR.Audio.bump();
+      toast(p, 'GİŞE KOLUNU KIRDIN! ' + RULES.bump, '#ff8a80', 1.2);
+    }
+  }
+
+  // A cone costs a bump like the lot's walls, at most one per bumpCd however many go down.
+  function roadEvent(e) {
+    const p = e.p, t = p.truck;
+    if (e.type === 'sheep') {
+      t.v = U.clamp(t.v, -e.v, e.v);
+      t.stun = Math.max(t.stun, e.stun);
+      p.shake = Math.max(p.shake, 0.5);
+      TR.Audio.sheep();
+      toast(p, 'KOYUNLAR KAÇIŞTI!', '#fff59d', 1.4);
+    } else if (p.bumpCd <= 0) {
+      p.bumpCd = 0.5;
+      p.bumps++;
+      TR.Audio.bump();
+      toast(p, 'DUBAYA ÇARPTIN! ' + RULES.bump, '#ff8a80', 1.2);
+    }
+  }
+
+  function nearMiss(p) {
+    if (p.nearMisses >= RULES.nearMissMax) return;
+    p.nearMisses++;
+    TR.Audio.nearMiss();
+    toast(p, 'KIL PAYI! +' + RULES.nearMiss, '#ffd740', 1.2);
+  }
+
   function recover(p) {
     p.resets++;
     if (p.phase === 'race') {
       const s = Math.max(R.START_S, p.s);
       const lane = Math.abs(p.d - R.LANE / 2) < Math.abs(p.d - R.LANE * 1.5) ? R.LANE / 2 : R.LANE * 1.5;
-      const q = G.road.posAt(s, lane);
+      const q = G.road.lanePos(s, lane);
       p.truck.place(q.x, q.y, q.h);
       p.truck.stun = 1.5;
       p.hint = -1;
@@ -303,14 +432,22 @@
   function finish(p) {
     p.phase = 'done';
     p.times.unload = G.time;
-    if (G.winner) return;
+    if (G.winner) {
+      G.lastChance = false;
+      G.overT = Math.min(G.overT, END_DELAY);
+      TR.Audio.good();
+      toast(p, 'SEN DE BİTİRDİN!', '#69f0ae', 2);
+      return;
+    }
     G.winner = p;
     G.state = 'finishing';
-    G.overT = 2.4;
+    const o = G.players[1 - p.idx];
+    G.lastChance = o.phase === 'park' || o.phase === 'unload';
+    G.overT = G.lastChance ? LAST_CHANCE : END_DELAY;
+    G.lastBeep = Math.ceil(G.overT);
     TR.Audio.win();
     toast(p, 'TURU KAZANDIN! +' + RULES.win, '#ffd54f', 3);
-    const o = G.players[1 - p.idx];
-    toast(o, p.name + ' bitirdi!', '#ff8a80', 3);
+    toast(o, p.name + ' bitirdi!' + (G.lastChance ? ' Kutuları yetiştir!' : ''), '#ff8a80', 3);
   }
 
   function score(q) {
@@ -407,6 +544,46 @@
     ctx.restore();
   }
 
+  function drawReversePath(p) {
+    const inp = p.inp;
+    if (p.assist === 'kapali' || !inp || inp.brake || !(inp.thr < 0 || p.truck.v < -2)) return;
+    const path = TR.Assist.reversePath(p.truck, inp.steer, T.LOT_CAP);
+    const pts = path.pts, end = pts[pts.length - 1];
+    ctx.save();
+    const color = path.jack ? '#ff5252' : '#4fc3f7';
+    ctx.setLineDash([4, 7]);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const q of pts) ctx.lineTo(q.x, q.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(end.x, end.y, path.jack ? 9 : 6, 0, 6.283);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawDraft(q) {
+    const t = q.truck, c = Math.cos(t.th), s = Math.sin(t.th), off = (G.time * 600) % 60;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.55 * q.draft).toFixed(2) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (const side of [-1, 1]) {
+      for (let k = 0; k < 4; k++) {
+        const along = T.CAB_FRONT + 10 - k * 60 - off, w = side * (T.TR_HW + 8 + (k % 2) * 6);
+        const x = t.x + c * along - s * w, y = t.y + s * along + c * w;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - c * 34, y - s * 34);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawTruck(q) {
     const open = q.phase === 'unload' || q.phase === 'done';
     q.truck.draw(ctx, { label: !open, steer: !open, open, cargo: q.unloader ? q.unloader.cargoFromDoor() : null, nextGlow: true });
@@ -428,11 +605,22 @@
     G.road.draw(ctx, view);
     G.lot.draw(ctx, view, G.players);
     for (const q of G.players) if (q.unloader) q.unloader.drawZone(ctx);
+    G.events.draw(ctx, view);
     G.traffic.draw(ctx, view);
-    if (p.phase === 'park') drawParkGuide(p);
+    G.junctions.draw(ctx, view);
+    TR.FX.draw(ctx, view, false);
+    if (p.phase === 'park') {
+      drawParkGuide(p);
+      drawReversePath(p);
+    }
     for (const q of G.players) drawTruck(q);
+    for (const q of G.players) if (q.draft > 0.15) drawDraft(q);
+    TR.FX.draw(ctx, view, true);
     for (const q of G.players) if (q.unloader) q.unloader.drawWorker(ctx, q === p);
+    const world = ctx.getTransform();
     ctx.restore();
+    TR.Light.draw(ctx, vp, view, p, G, world, DPR);
+    if (G.route.id === 'kar') TR.FX.drawSnow(ctx, vp, p.cam, G.time);
     TR.HUD.draw(ctx, vp, p, G);
   }
 
@@ -479,6 +667,16 @@
     if (document.hidden && TR.Settings.get().autoPause) G.pause();
   });
 
+  // Engines idle through the countdown and fall silent in menus, pause, the round result and once a
+  // truck is parked for unloading.
+  function updateEngines() {
+    const live = G.state === 'play' || G.state === 'finishing' || G.state === 'countdown';
+    G.players.forEach((p, i) => TR.Audio.engine(i, {
+      on: live && (p.phase === 'race' || p.phase === 'park'),
+      v: p.truck.v, thr: p.inp ? p.inp.thr : 0, brake: !!(p.inp && p.inp.brake),
+    }));
+  }
+
   // ---------- loop ----------
   let last = performance.now();
   function frame(now) {
@@ -487,6 +685,7 @@
     TR.UI.handleKeys();
     if (G.state !== 'paused' && G.state !== 'menu') update(dt);
     render(dt);
+    updateEngines();
     TR.Input.endFrame();
     requestAnimationFrame(frame);
   }
