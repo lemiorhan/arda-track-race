@@ -2,9 +2,10 @@
 (function () {
   const TR = window.TR, U = TR.U, G = TR.Game, ON = TR.Online;
   const $ = (id) => document.getElementById(id);
-  const SCREENS = ['title', 'online', 'setup', 'routes', 'howto', 'settings', 'scores', 'pause', 'roundResult', 'matchResult'];
+  const SCREENS = ['intro', 'title', 'online', 'setup', 'routes', 'howto', 'settings', 'scores', 'pause', 'roundResult', 'matchResult'];
   const SUB = ['howto', 'settings', 'scores'];
   const RESULT_LOCK_MS = 1200;
+  const INTRO_MS = 6500;
   // Names are typed by users, and an online guest fills its result screens from what the host sends; all of
   // it ends up in innerHTML.
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -48,6 +49,10 @@
     ON.leave(null);
     G.toMenu();
     show('title');
+  }
+
+  function endIntro() {
+    if (UI.current === 'intro') show('title');
   }
 
   function confirmBox(text, yes) {
@@ -412,6 +417,8 @@
       else if (!guest) routesInput();
     } else if (c === 'pause') {
       if (I.wasHit(['Escape', 'KeyP'])) G.resume();
+    } else if (c === 'intro') {
+      if (I.wasHit(enter.concat('Escape', 'Space'))) endIntro();
     } else if (c === 'title') {
       if (I.wasHit(enter)) openSetup();
     } else if (c === 'online') {
@@ -487,7 +494,9 @@
     document.addEventListener('click', (e) => {
       if (e.target instanceof HTMLButtonElement) e.target.blur();
     });
-    show('title');
+    $('btnSkipIntro').addEventListener('click', endIntro);
+    show('intro');
+    setTimeout(endIntro, INTRO_MS);
     G.start();
   }
 

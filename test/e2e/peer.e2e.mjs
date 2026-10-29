@@ -17,6 +17,7 @@ try {
     const p = await (await browser.newContext({ viewport: { width: 1280, height: 760 } })).newPage();
     watch(p, label);
     await p.goto(server.url);
+    await p.click('#btnSkipIntro');
     return p;
   };
   const H = await open(hb, 'host'), Gp = await open(gb, 'guest');

@@ -176,13 +176,75 @@ button.primary:hover { background: #388e3c; }
 .card.hero { width: min(560px, 100%); text-align: center; }
 .card.narrow { width: min(620px, 100%); }
 .logo {
-  font-size: 64px;
+  font-size: 50px;
   font-weight: 900;
-  letter-spacing: 4px;
+  letter-spacing: 3px;
   background: linear-gradient(90deg, var(--p1), #fff 50%, var(--p2));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+.by { margin: 2px 0 14px; color: var(--gold); font-weight: 700; letter-spacing: 1px; }
+
+/* opening intro; INTRO_MS in ui.js is when it hands over to the title */
+.overlay.intro { background: #05070a; flex-direction: column; overflow: hidden; }
+.intro-stage { text-align: center; }
+.intro-title {
+  font-size: clamp(40px, 9vw, 110px);
+  font-weight: 900;
+  letter-spacing: 6px;
+  background: linear-gradient(90deg, var(--p1), #fff 50%, var(--p2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  opacity: 0;
+  animation: intro-zoom 1.4s 0.3s ease-out forwards;
+}
+.intro-by {
+  margin-top: 8px;
+  font-size: clamp(18px, 3vw, 30px);
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 2px;
+  opacity: 0;
+  animation: intro-rise 0.9s 1.7s ease-out forwards;
+}
+.intro-credits {
+  margin-top: 40px;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  align-items: baseline;
+  font-size: 22px;
+  opacity: 0;
+  animation: intro-rise 0.9s 3s ease-out forwards;
+}
+.intro-credits span { color: var(--muted); font-size: 14px; text-transform: uppercase; letter-spacing: 2px; }
+.intro-credits b:nth-of-type(1) { color: var(--p1); }
+.intro-credits b:nth-of-type(2) { color: var(--p2); }
+.intro-road {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12%;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 40px, transparent 40px 70px);
+}
+.intro-truck {
+  position: absolute;
+  bottom: 2px;
+  left: 0;
+  font-size: 48px;
+  transform: scaleX(-1);
+  animation: intro-drive 6.5s linear forwards;
+}
+.intro-skip { position: absolute; right: 24px; bottom: 24px; }
+@keyframes intro-zoom { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: scale(1); } }
+@keyframes intro-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes intro-drive { from { left: -80px; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .intro-title, .intro-by, .intro-credits { animation: none; opacity: 1; }
+  .intro-truck { display: none; }
 }
 .menu-buttons { display: flex; flex-direction: column; gap: 10px; margin: 24px auto 4px; max-width: 340px; }
 button.big { font-size: 18px; padding: 14px 22px; }
