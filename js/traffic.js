@@ -93,7 +93,7 @@
         color: kd.kind === 'bus' ? r.pick(['#f2b705', '#e9eef2', '#2a6fdb']) : r.pick(COLORS),
         d: dir * (lane === 0 ? LANE / 2 : LANE * 1.5), dTarget: 0,
         s: 0, v: vBase, vBase, x: 0, y: 0, h: 0,
-        laneT: r.range(3, 9), wreck: null, honked: false, flash: 0, brake: false, dormant: 0,
+        laneT: r.range(3, 9), wreck: null, honked: false, hornBy: null, flash: 0, brake: false, dormant: 0,
         near: [Infinity, Infinity], nearDone: [false, false],
       };
     }
@@ -222,6 +222,13 @@
         c.s += c.v * c.dir * dt;
         if (c.flash > 0) c.flash -= dt;
 
+        // Like the horn itself (game.js), only this segment's trucks count: racersNear's trucks on a sibling
+        // branch keep their own road's d.
+        if (c.dir > 0 && c.hornBy && c.dTarget === c.d) {
+          const own = players.filter((q) => q.seg === this.road.seg.id), p = own.find((q) => q.idx === c.hornBy.idx);
+          if (!p || hornedBy(c, p, c.hornBy.range) === null) c.hornBy = null;
+          else this.giveWay(c, own);
+        }
         if (c.dir > 0) {
           c.laneT -= dt;
           if (c.laneT <= 0) {
@@ -375,24 +382,31 @@
       return out;
     }
 
-    // The first car ahead of the truck in its lane and direction within range moves over, if the
-    // other lane has room. Returns whether one did.
+    // The first car ahead of the truck in its lane and direction within range moves over at the first
+    // chance it gets, which update keeps looking for while the truck stays within range behind it in its
+    // lane on this segment; a car handed off to another segment forgets the horn. Returns whether it moved
+    // over at once.
     yieldTo(p, players, range) {
       let best = null, bestRel = range;
       for (const c of this.cars) {
         if (c.dir < 0 || c.dormant > 0 || c.wreck || c.dTarget !== c.d) continue;
-        if (Math.abs(c.d - p.d) > 30) continue;
-        const rel = c.s - p.s - TR.TRUCK.CAB_FRONT;
-        if (rel > 0 && rel < bestRel) { best = c; bestRel = rel; }
+        const rel = hornedBy(c, p, range);
+        if (rel !== null && rel < bestRel) { best = c; bestRel = rel; }
       }
       if (!best) return false;
-      const other = best.lane === 0 ? 1 : 0;
+      best.hornBy = { idx: p.idx, range };
+      return this.giveWay(best, players);
+    }
+
+    giveWay(c, players) {
+      const other = c.lane === 0 ? 1 : 0;
       const nd = other === 0 ? LANE / 2 : LANE * 1.5;
-      const truckThere = players.some((q) => Math.abs(q.s - best.s) < 260 && Math.abs(q.d - nd) < 50);
-      if (truckThere || !this.laneFree(best, nd, 160, 120) || !this.open(best, nd)) return false;
-      best.lane = other;
-      best.dTarget = nd;
-      best.laneT = this.rnd.range(4, 10);
+      const truckThere = players.some((q) => Math.abs(q.s - c.s) < 260 && Math.abs(q.d - nd) < 50);
+      if (truckThere || !this.laneFree(c, nd, 160, 120) || !this.open(c, nd)) return false;
+      c.lane = other;
+      c.dTarget = nd;
+      c.laneT = this.rnd.range(4, 10);
+      c.hornBy = null;
       return true;
     }
 
@@ -403,6 +417,12 @@
         drawCar(ctx, c);
       }
     }
+  }
+
+  // How far car c is ahead of truck p's cab in p's lane, or null when it is not within range there.
+  function hornedBy(c, p, range) {
+    const rel = c.s - p.s - TR.TRUCK.CAB_FRONT;
+    return Math.abs(c.d - p.d) <= 30 && rel > 0 && rel < range ? rel : null;
   }
 
   // The first overlap of car c with truck t, or null.

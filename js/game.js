@@ -15,7 +15,8 @@
   // distance to the lot gone, the top speed rises by BOOST for LEN seconds, and same-direction cars do not
   // hit the truck meanwhile (Traffic.collide).
   const TURBO = { AT: [0.15, 0.7], LEN: [5, 10], BOOST: 0.45 };
-  // The horn moves the first same-direction car within RANGE ahead; it works again after CD seconds.
+  // The horn moves the first same-direction car within RANGE ahead over as soon as the other lane has room,
+  // while the truck stays within RANGE behind it on its segment; it works again after CD seconds.
   const HORN = { RANGE: 420, CD: 2.5 };
   // Segment k's events, traffic and junctions draw from the round's streams moved by SEG_SALT × k.
   const SEG_SALT = 104729;

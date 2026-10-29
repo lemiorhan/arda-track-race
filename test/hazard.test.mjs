@@ -191,6 +191,86 @@ test('a car yields to the horn past a truck on the sibling branch', () => {
   assert.equal(c.dTarget, R.LANE * 1.5, 'the car did not move over');
 });
 
+// A car honked at with a car beside it, and the truck stopped behind it at s0. Only the shortcut's traffic
+// moves. The other truck is parked unless sib puts it on the busy branch beside the first, in its outer lane.
+function hornBlocked(w, s0 = 5000, sib = false) {
+  const TR = w.TR, G = TR.Game, R = TR.ROAD, T = TR.TRUCK, [a, b] = G.players;
+  delete G.map.segs[SHORTCUT].traffic.update;
+  if (sib) put(w, b, BUSY, s0, R.LANE * 1.5);
+  else park(w, b);
+  put(w, a, SHORTCUT, s0, R.LANE / 2);
+  hold(w, b, {});
+  const s = s0 + T.CAB_FRONT + 150;
+  const c = carOn(w, SHORTCUT, 1, s, R.LANE / 2), side = carOn(w, SHORTCUT, 1, s, R.LANE * 1.5);
+  for (const o of [c, side]) Object.assign(o, { v: 100, vBase: 100, laneT: Infinity });
+  hold(w, a, { horn: true });
+  w.step();
+  hold(w, a, {});
+  for (let f = 0; f < 30; f++) {
+    w.step();
+    assert.equal(c.dTarget, R.LANE / 2, 'frame ' + f + ': the car moved into a taken lane');
+  }
+  return { a, c, side };
+}
+
+test('a car honked at moves over once the lane beside it clears', () => {
+  const w = world([], true), R = w.TR.ROAD, { c, side } = hornBlocked(w);
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  w.step();
+  assert.equal(c.dTarget, R.LANE * 1.5, 'the car did not move over');
+});
+
+test('a car honked at forgets the horn once the truck is out of range', () => {
+  const w = world([], true), R = w.TR.ROAD, T = w.TR.TRUCK, { a, c, side } = hornBlocked(w);
+  runUntil(w, 600, () => c.s - a.s - T.CAB_FRONT > 420);
+  assert.ok(c.s - a.s - T.CAB_FRONT > 420, 'the car stayed in range');
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  for (let f = 0; f < 30; f++) w.step();
+  assert.equal(c.dTarget, R.LANE / 2, 'the car moved over for a stale horn');
+});
+
+test('a car honked at near the fork moves over past a truck on the sibling branch', () => {
+  const w = world([], true), R = w.TR.ROAD, { c, side } = hornBlocked(w, 1500, true);
+  assert.ok(1500 < w.TR.MAP.LINK_R, 'the trucks are not near the fork');
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  w.step();
+  assert.equal(c.dTarget, R.LANE * 1.5, 'the car did not move over');
+});
+
+test('a car honked at forgets the horn once the truck leaves its segment', () => {
+  const w = world([], true), R = w.TR.ROAD, { a, c, side } = hornBlocked(w);
+  put(w, a, BUSY, 5000, R.LANE / 2);
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  for (let f = 0; f < 30; f++) w.step();
+  assert.equal(c.dTarget, R.LANE / 2, 'the car moved over for a truck on another segment');
+  assert.equal(c.hornBy, null);
+});
+
+test('a car that moved over for the horn does not move back when the truck follows it', () => {
+  const w = world([], true), R = w.TR.ROAD, T = w.TR.TRUCK, { a, c, side } = hornBlocked(w);
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  w.step();
+  assert.equal(c.dTarget, R.LANE * 1.5, 'the car did not move over');
+  put(w, a, SHORTCUT, c.s - T.CAB_FRONT - 150, R.LANE * 1.5);
+  for (let f = 0; f < 120; f++) {
+    w.step();
+    assert.equal(c.dTarget, R.LANE * 1.5, 'frame ' + f + ': the car moved back');
+  }
+  assert.equal(c.d, c.dTarget, 'the car never settled in its new lane');
+});
+
+test('a car honked at in the middle of a lane change keeps on with it', () => {
+  const w = world([], true), R = w.TR.ROAD, { c, side } = hornBlocked(w);
+  w.TR.Game.map.segs[SHORTCUT].traffic.retire(side);
+  // As the car's own lane change (laneT) starts one.
+  c.lane = 1;
+  c.dTarget = R.LANE * 1.5;
+  for (let f = 0; f < 30; f++) {
+    w.step();
+    assert.equal(c.dTarget, R.LANE * 1.5, 'frame ' + f + ': the car turned back');
+  }
+});
+
 test('the red light ahead comes from the truck\'s own segment', () => {
   const w = world([{ type: 'cross', rise: 5000 }]), TR = w.TR, G = TR.Game, R = TR.ROAD, T = TR.TRUCK, [a, b] = G.players;
   const cross = G.map.segs[SHORTCUT].road.points[0];
