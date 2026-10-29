@@ -46,8 +46,10 @@
         v = U.approach(v, 0, T.HARD_BRAKE * this.grip * dt);
         this.braking = true;
       } else if (thr > 0) {
+        // A cap above MAX_FWD (slipstream, turbo) stretches the pull-off curve so the truck can reach it.
+        const top = Math.max(T.MAX_FWD, cap);
         if (v < -1) { v = Math.min(0, v + T.BRAKE * this.grip * dt); this.braking = true; }
-        else v += T.ACC * (1.1 - 0.8 * Math.max(0, v) / T.MAX_FWD) * dt;
+        else v += T.ACC * (top / T.MAX_FWD) * (1.1 - 0.8 * Math.max(0, v) / top) * dt;
       } else if (thr < 0) {
         if (v > 1) { v = Math.max(0, v - T.BRAKE * this.grip * dt); this.braking = true; }
         else v = Math.max(-T.MAX_REV, v - T.REV_ACC * dt);

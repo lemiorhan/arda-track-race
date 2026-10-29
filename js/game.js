@@ -11,6 +11,9 @@
   // Slipstream: within DIST behind the other truck's trailer and LANE of its line, the top speed rises by
   // up to BOOST, building over RISE seconds and fading over FALL.
   const DRAFT = { DIST: 380, LANE: 30, BOOST: 0.12, RISE: 1.2, FALL: 2.5, MIN_V: 120 };
+  // Turbo: once a round, at a point picked within AT of the route, the top speed rises by BOOST for LEN
+  // seconds, and same-direction cars do not hit the truck meanwhile (Traffic.collide).
+  const TURBO = { AT: [0.15, 0.7], LEN: [5, 10], BOOST: 0.45 };
   // The horn moves the first same-direction car within RANGE ahead; it works again after CD seconds.
   const HORN = { RANGE: 420, CD: 2.5 };
 
@@ -63,6 +66,7 @@
     G.plan = TR.makeCargoPlan(U.rng(seed * 7 + 3));
     G.contract = U.rng(seed * 13 + 5).pick(TR.CONTRACTS);
     G.weather = o.weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
+    const turboRnd = U.rng(seed * 29 + 13);
     G.players = COLORS.map((color, i) => {
       const lane = i === 0 ? R.LANE / 2 : R.LANE * 1.5;
       const q = G.road.posAt(R.START_S, lane);
@@ -73,6 +77,7 @@
         phase: 'race', s: R.START_S, d: lane, hint: -1, offroad: false,
         inp: null, autoT: 0, draft: 0, hornCd: 0, nearMisses: 0, redLights: 0, speeding: 0, flashT: 0, redAhead: Infinity,
         crashes: 0, bumps: 0, resets: 0, bumpCd: 0, railCd: 0, skidD: 0,
+        turbo: 0, ghost: false, turboS: G.road.length * turboRnd.range(...TURBO.AT), turboLen: turboRnd.range(...TURBO.LEN),
         stats: { firstToLot: false, parkPts: null },
         cam: { x: q.x, y: q.y - 250, z: 0.8 }, shake: 0,
         toast: '', toastT: 0, toastColor: '#fff',
@@ -204,7 +209,9 @@
       p.offroad = p.phase === 'race' && Math.abs(p.d) > R.HALF + 4 && loc.s < G.road.length && !G.junctions.onSide(p.truck.x, p.truck.y);
       p.redAhead = p.phase === 'race' ? G.junctions.stopAhead(p) : Infinity;
       updateDraft(p, dt);
-      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + DRAFT.BOOST * p.draft);
+      updateTurbo(p, dt);
+      const boost = DRAFT.BOOST * p.draft + (p.turbo > 0 ? TURBO.BOOST : 0);
+      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + boost);
       if (p.phase === 'race' && p.assist === 'tam' && !inp.brake) {
         const auto = TR.Assist.autoBrake(G.road, p, inp, p.redAhead);
         if (auto.thr < 0 && inp.thr >= 0) p.autoT = 0.5;
@@ -230,6 +237,18 @@
     const inZone = p.phase === 'race' && o.phase === 'race' && !p.offroad && p.truck.v > DRAFT.MIN_V &&
       gap > 0 && gap < DRAFT.DIST && Math.abs(o.d - p.d) < DRAFT.LANE;
     p.draft = inZone ? Math.min(1, p.draft + dt / DRAFT.RISE) : Math.max(0, p.draft - dt / DRAFT.FALL);
+  }
+
+  function updateTurbo(p, dt) {
+    if (p.phase !== 'race') p.turbo = 0;
+    else if (p.turbo > 0) p.turbo = Math.max(0, p.turbo - dt);
+    else if (p.s >= p.turboS) {
+      p.turbo = p.turboLen;
+      p.turboS = Infinity;
+      p.ghost = true;
+      TR.Audio.go();
+      toast(p, 'TURBO!', '#ffab40', 1.4);
+    }
   }
 
   function postPhysics(p, dt) {
@@ -354,6 +373,10 @@
     if (p.inp && p.inp.thr > 0 && Math.random() < 20 * dt) {
       const x = t.x + c * 6 + s * (T.CAB_HW - 3), y = t.y + s * 6 - c * (T.CAB_HW - 3);
       TR.FX.emit('exhaust', x, y, -c * 30 + (Math.random() - 0.5) * 20, -s * 30 + (Math.random() - 0.5) * 20);
+    }
+    if (p.turbo > 0 && Math.random() < 40 * dt) {
+      const x = t.x + c * 6 + s * (T.CAB_HW - 3), y = t.y + s * 6 - c * (T.CAB_HW - 3);
+      TR.FX.emit('spark', x, y, -c * 90 + (Math.random() - 0.5) * 40, -s * 90 + (Math.random() - 0.5) * 40, '#ff9100');
     }
     const fast = Math.abs(t.v) > 40;
     const pc = Math.cos(t.phi), ps = Math.sin(t.phi), hw = T.TR_HW * 0.8;
@@ -487,7 +510,7 @@
   function camTarget(p) {
     const t = p.truck;
     if (p.phase === 'race') {
-      const look = U.clamp(t.v, -40, T.MAX_FWD) * 1.15;
+      const look = U.clamp(t.v, -40, T.MAX_FWD * (1 + TURBO.BOOST)) * 1.15;
       return { x: t.x + Math.cos(t.th) * look, y: t.y + Math.sin(t.th) * look, z: 1.0 - 0.3 * U.clamp(t.v / T.MAX_FWD, 0, 1) };
     }
     if (p.phase === 'park') {

@@ -139,6 +139,7 @@
     text(ctx, 'Kaza: ' + p.crashes + (p.offroad ? '   · yol dışı' : ''), vp.x + 30, vp.y + vp.h - 30, 15,
       p.offroad ? '#ffb74d' : '#cfd8dc', 'left', '700');
     if (p.draft > 0.3) banner(ctx, 'RÜZGÂR TÜNELİ', vp.x + 112, vp.y + vp.h - 134, 15, '#b3e5fc');
+    if (p.turbo > 0) banner(ctx, 'TURBO · ' + Math.ceil(p.turbo) + ' sn', vp.x + 112, vp.y + vp.h - 162, 18, '#ffab40');
     drawMinimap(ctx, vp, p, g);
     drawBendWarning(ctx, vp, p, g);
   }
