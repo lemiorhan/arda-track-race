@@ -320,8 +320,14 @@
       c.x = 1e9; c.y = 1e9;
     }
 
+    // A truck in turbo (p.ghost) drives through cars of its own direction, and keeps doing so after the turbo
+    // while holds(p), so a turbo that ends inside a car is not a crash.
     collide(players) {
-      return collideCars(this.cars, players);
+      return collideCars(this.cars, players, (c, p) => c.dir > 0 && p.ghost);
+    }
+
+    holds(p) {
+      return this.cars.some((c) => c.dir > 0 && c.dormant <= 0 && !c.wreck && touch(c, p.truck));
     }
 
     // Puts a sleeping car of direction dir in lane (the outer one unless given) at s, looking and moving like
@@ -399,32 +405,38 @@
     }
   }
 
-  // Returns hits as {player, car, headOn}. A car that hits a truck turns into a wreck.
-  function collideCars(cars, players) {
+  // The first overlap of car c with truck t, or null.
+  function touch(c, t) {
+    if (Math.abs(c.x - t.x) > 260 || Math.abs(c.y - t.y) > 260) return null;
+    const cb = U.obb(c.x, c.y, c.len / 2, c.wid / 2, c.h);
+    for (const tb of t.boxes()) {
+      const m = U.sat(tb, cb);
+      if (m) return m;
+    }
+    return null;
+  }
+
+  // Returns hits as {player, car, headOn}. A car that hits a truck turns into a wreck; pass(car, player)
+  // names the pairs that drive through each other.
+  function collideCars(cars, players, pass) {
     const hits = [];
     for (const c of cars) {
       if (c.dormant > 0 || c.wreck) continue;
-      const cb = U.obb(c.x, c.y, c.len / 2, c.wid / 2, c.h);
       for (const p of players) {
-        if (p.phase !== 'race') continue;
-        const t = p.truck;
-        if (Math.abs(c.x - t.x) > 260 || Math.abs(c.y - t.y) > 260) continue;
-        for (const tb of t.boxes()) {
-          const m = U.sat(tb, cb);
-          if (!m) continue;
-          const tvx = Math.cos(t.th) * t.v, tvy = Math.sin(t.th) * t.v;
-          const cvx = Math.cos(c.h) * c.v, cvy = Math.sin(c.h) * c.v;
-          c.wreck = {
-            vx: tvx * 0.6 + cvx * 0.2 + m.nx * 140,
-            vy: tvy * 0.6 + cvy * 0.2 + m.ny * 140,
-            spin: (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 4),
-            t: 3.5,
-          };
-          c.v = 0;
-          hits.push({ player: p, car: c, headOn: Math.cos(U.wrap(c.h - t.th)) < -0.5 });
-          break;
-        }
-        if (c.wreck) break;
+        if (p.phase !== 'race' || (pass && pass(c, p))) continue;
+        const t = p.truck, m = touch(c, t);
+        if (!m) continue;
+        const tvx = Math.cos(t.th) * t.v, tvy = Math.sin(t.th) * t.v;
+        const cvx = Math.cos(c.h) * c.v, cvy = Math.sin(c.h) * c.v;
+        c.wreck = {
+          vx: tvx * 0.6 + cvx * 0.2 + m.nx * 140,
+          vy: tvy * 0.6 + cvy * 0.2 + m.ny * 140,
+          spin: (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 4),
+          t: 3.5,
+        };
+        c.v = 0;
+        hits.push({ player: p, car: c, headOn: Math.cos(U.wrap(c.h - t.th)) < -0.5 });
+        break;
       }
     }
     return hits;

@@ -17,6 +17,7 @@ try {
     const p = await ctx.newPage();
     watch(p, label);
     await p.goto(URL);
+    await p.click('#btnSkipIntro');
     return p;
   };
   // A key pressed in the first moments of a screen is dropped by the menu's input lock.

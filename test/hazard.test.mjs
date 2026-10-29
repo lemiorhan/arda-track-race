@@ -40,6 +40,8 @@ function world(features, still = false, events = null) {
     if (still) sg.junctions.update = () => [];
     if (!events) sg.events.update = () => [];
   }
+  // put() jumps a truck past its turbo point, and a truck in turbo drives through cars.
+  for (const p of G.players) p.turboS = Infinity;
   G.map.draw = () => {};
   TR.Light.draw = () => {};
   TR.HUD.draw = () => {};

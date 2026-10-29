@@ -1,6 +1,7 @@
 {
   "name": "truck-race",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:e2e": "node test/e2e/match.e2e.mjs",

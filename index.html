@@ -3,16 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tır Yarışı</title>
+  <title>Trucks on Road - by Arda & Kuzey Brothers</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <canvas id="game"></canvas>
 
+  <!-- Açılış introsu -->
+  <div id="intro" class="overlay intro hidden">
+    <div class="intro-stage">
+      <div class="intro-title">TRUCKS ON ROAD</div>
+      <div class="intro-by">by Arda &amp; Kuzey Brothers</div>
+      <div class="intro-credits">
+        <span>Yapanlar</span>
+        <b>Arda</b>
+        <b>Kuzey</b>
+      </div>
+    </div>
+    <div class="intro-road"><span class="intro-truck">🚚</span></div>
+    <button id="btnSkipIntro" class="intro-skip">Skip intro (Enter)</button>
+  </div>
+
   <!-- Ana menü -->
-  <div id="title" class="overlay">
+  <div id="title" class="overlay hidden">
     <div class="card hero">
-      <div class="logo">TIR YARIŞI</div>
+      <div class="logo">TRUCKS ON ROAD</div>
+      <p class="by">by Arda &amp; Kuzey Brothers</p>
       <p class="sub">İki tır, bir yol ağı. Yolunu seç, yarış, geri geri park et, kutuları doğru diz.</p>
       <div class="menu-buttons">
         <button data-go="setup" class="primary big">Yeni Maç</button>

@@ -11,6 +11,10 @@
   // Slipstream: within DIST behind the other truck's trailer and LANE of its line, the top speed rises by
   // up to BOOST, building over RISE seconds and fading over FALL.
   const DRAFT = { DIST: 380, LANE: 30, BOOST: 0.12, RISE: 1.2, FALL: 2.5, MIN_V: 120 };
+  // Turbo: once a round, at a point picked within AT of the shortest path's length and measured as the
+  // distance to the lot gone, the top speed rises by BOOST for LEN seconds, and same-direction cars do not
+  // hit the truck meanwhile (Traffic.collide).
+  const TURBO = { AT: [0.15, 0.7], LEN: [5, 10], BOOST: 0.45 };
   // The horn moves the first same-direction car within RANGE ahead; it works again after CD seconds.
   const HORN = { RANGE: 420, CD: 2.5 };
   // Segment k's events, traffic and junctions draw from the round's streams moved by SEG_SALT × k.
@@ -87,6 +91,7 @@
     G.plan = TR.makeCargoPlan(U.rng(seed * 7 + 3));
     G.contract = U.rng(seed * 13 + 5).pick(TR.CONTRACTS);
     G.weather = o.weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
+    const turboRnd = U.rng(seed * 29 + 13);
     G.players = COLORS.map((color, i) => {
       const lane = i === 0 ? R.LANE / 2 : R.LANE * 1.5;
       const q = G.map.segs[G.map.start].road.posAt(R.START_S, lane);
@@ -97,6 +102,7 @@
         phase: 'race', seg: G.map.start, s: R.START_S, d: lane, hint: -1, offroad: false,
         inp: null, autoT: 0, draft: 0, hornCd: 0, nearMisses: 0, redLights: 0, speeding: 0, flashT: 0, redAhead: Infinity,
         crashes: 0, bumps: 0, resets: 0, bumpCd: 0, railCd: 0, skidD: 0,
+        turbo: 0, ghost: false, turboS: G.map.shortest * turboRnd.range(...TURBO.AT), turboLen: turboRnd.range(...TURBO.LEN),
         stats: { firstToLot: false, parkPts: null },
         cam: { x: q.x, y: q.y - 250, z: 0.8 }, shake: 0,
         toast: '', toastT: 0, toastColor: '#fff',
@@ -190,8 +196,12 @@
     TR.FX.update(dt);
     // Traffic appears out of sight of every screen, the online guest's too.
     const views = viewports().concat(TR.Online.remoteViewports()).map((vp) => viewOf(G.players[vp.idx], vp));
-    G.map.segs.forEach((sg, k) => {
-      const on = G.players.filter((p) => p.seg === k);
+    // Every segment's cars can touch a truck near a node, so a truck stops passing through cars only once it
+    // is clear of all of them.
+    for (const p of G.players) {
+      if (p.ghost && p.turbo <= 0 && !G.map.segs.some((sg) => sg.traffic.holds(p))) p.ghost = false;
+    }
+    G.map.segs.forEach((sg, k) => {      const on = G.players.filter((p) => p.seg === k);
       for (const e of sg.junctions.update(dt, on, G.time)) junctionEvent(e);
       for (const e of sg.events.update(dt, on, sg.traffic)) roadEvent(e);
       sg.traffic.update(dt, G.map.racersNear(k, G.players), views, () => TR.Audio.horn(), sg.junctions, G.time);
@@ -229,7 +239,9 @@
       p.offroad = p.phase === 'race' && rows.every((c) => offroadOn(G.map.segs[c.seg], c, p.truck));
       p.redAhead = p.phase === 'race' ? sg.junctions.stopAhead(p) : Infinity;
       updateDraft(p, dt);
-      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + DRAFT.BOOST * p.draft);
+      updateTurbo(p, dt);
+      const boost = DRAFT.BOOST * p.draft + (p.turbo > 0 ? TURBO.BOOST : 0);
+      const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + boost);
       if (p.phase === 'race' && p.assist === 'tam' && !inp.brake) {
         const auto = TR.Assist.autoBrake(road, p, inp, p.redAhead);
         if (auto.thr < 0 && inp.thr >= 0) p.autoT = 0.5;
@@ -282,6 +294,18 @@
     const inZone = p.phase === 'race' && o.phase === 'race' && o.seg === p.seg && !p.offroad && p.truck.v > DRAFT.MIN_V &&
       gap > 0 && gap < DRAFT.DIST && Math.abs(o.d - p.d) < DRAFT.LANE;
     p.draft = inZone ? Math.min(1, p.draft + dt / DRAFT.RISE) : Math.max(0, p.draft - dt / DRAFT.FALL);
+  }
+
+  function updateTurbo(p, dt) {
+    if (p.phase !== 'race') p.turbo = 0;
+    else if (p.turbo > 0) p.turbo = Math.max(0, p.turbo - dt);
+    else if (G.map.shortest - G.map.distToLot(p.seg, p.s) >= p.turboS) {
+      p.turbo = p.turboLen;
+      p.turboS = Infinity;
+      p.ghost = true;
+      TR.Audio.go();
+      toast(p, 'TURBO!', '#ffab40', 1.4);
+    }
   }
 
   function postPhysics(p, dt) {
@@ -419,6 +443,10 @@
       const x = t.x + c * 6 + s * (T.CAB_HW - 3), y = t.y + s * 6 - c * (T.CAB_HW - 3);
       TR.FX.emit('exhaust', x, y, -c * 30 + (Math.random() - 0.5) * 20, -s * 30 + (Math.random() - 0.5) * 20);
     }
+    if (p.turbo > 0 && Math.random() < 40 * dt) {
+      const x = t.x + c * 6 + s * (T.CAB_HW - 3), y = t.y + s * 6 - c * (T.CAB_HW - 3);
+      TR.FX.emit('spark', x, y, -c * 90 + (Math.random() - 0.5) * 40, -s * 90 + (Math.random() - 0.5) * 40, '#ff9100');
+    }
     const fast = Math.abs(t.v) > 40;
     const pc = Math.cos(t.phi), ps = Math.sin(t.phi), hw = T.TR_HW * 0.8;
     const wheels = [-1, 1].map((k) => ({ x: t.x - pc * T.LT + ps * k * hw, y: t.y - ps * T.LT - pc * k * hw }));
@@ -553,7 +581,7 @@
   function camTarget(p) {
     const t = p.truck;
     if (p.phase === 'race') {
-      const look = U.clamp(t.v, -40, T.MAX_FWD) * 1.15;
+      const look = U.clamp(t.v, -40, T.MAX_FWD * (1 + TURBO.BOOST)) * 1.15;
       return { x: t.x + Math.cos(t.th) * look, y: t.y + Math.sin(t.th) * look, z: 1.0 - 0.3 * U.clamp(t.v / T.MAX_FWD, 0, 1) };
     }
     if (p.phase === 'park') {
