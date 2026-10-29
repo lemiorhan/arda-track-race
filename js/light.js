@@ -81,13 +81,17 @@
   // world is the viewport's world transform (device pixels, shake included), so the layer lines up with
   // what renderView drew. Signs and signal heads are drawn again on top: they must read in the dark.
   function draw(ctx, vp, view, p, G, world, dpr) {
-    const road = G.road, night = G.weather === 'gece', fog = G.weather === 'sis';
-    const { i0, i1 } = road.sampleList(view);
-    const sv0 = i0 * DS - L.RAMP, sv1 = i1 * DS + L.RAMP;
-    const tunnels = road.sections.filter((t) => t.type === 'tunnel' && t.s1 > sv0 && t.s0 < sv1);
+    const night = G.weather === 'gece', fog = G.weather === 'sis';
+    const shown = G.map.visible(view).map((k) => {
+      const sg = G.map.segs[k], { i0, i1 } = sg.road.sampleList(view);
+      return { sg, road: sg.road, i0, i1 };
+    });
+    const tunnels = shown.flatMap(({ road, i0, i1 }) => road.sections
+      .filter((t) => t.type === 'tunnel' && t.s1 > i0 * DS - L.RAMP && t.s0 < i1 * DS + L.RAMP)
+      .map((sec) => ({ road, sec })));
     if (!night && !fog && !tunnels.length) return;
     const W = Math.ceil(vp.w * dpr), H = Math.ceil(vp.h * dpr);
-    const cars = G.traffic.cars.concat(G.junctions.cars);
+    const cars = G.map.segs.flatMap((sg) => sg.traffic.cars.concat(sg.junctions.cars));
     const toLayer = (lc) => lc.setTransform(world.a, world.b, world.c, world.d, world.e - vp.x * dpr, world.f - vp.y * dpr);
 
     if (night || tunnels.length) {
@@ -97,17 +101,19 @@
         lc.fillStyle = 'rgba(' + DARK + ',' + L.NIGHT + ')';
         lc.fillRect(view.x0 - 50, view.y0 - 50, view.x1 - view.x0 + 100, view.y1 - view.y0 + 100);
       }
-      for (const sec of tunnels) tunnelDark(lc, road, sec);
+      for (const { road, sec } of tunnels) tunnelDark(lc, road, sec);
       lc.globalCompositeOperation = 'destination-out';
-      for (const sec of tunnels) {
+      for (const { road, sec } of tunnels) {
         for (let s = sec.s0 + L.LAMP_STEP / 2; s < sec.s1; s += L.LAMP_STEP) {
           const q = road.posAt(s, 0);
           if (inView(view, q.x, q.y, L.LAMP_R)) glow(lc, q.x, q.y, L.LAMP_R, 0.7);
         }
       }
       if (night) {
-        for (const j of road.points) {
-          if (TR.POINTS[j.type].flat && inView(view, j.x, j.y, L.JUNCTION_R)) glow(lc, j.x, j.y, L.JUNCTION_R, 0.8);
+        for (const { road } of shown) {
+          for (const j of road.points) {
+            if (TR.POINTS[j.type].flat && inView(view, j.x, j.y, L.JUNCTION_R)) glow(lc, j.x, j.y, L.JUNCTION_R, 0.8);
+          }
         }
         const b = G.lot.bounds;
         lc.fillStyle = 'rgba(0,0,0,0.85)';
@@ -168,8 +174,8 @@
       }
       ctx.globalCompositeOperation = 'source-over';
     }
-    road.drawSigns(ctx, i0, i1);
-    G.junctions.drawLights(ctx, view);
+    for (const { road, i0, i1 } of shown) road.drawSigns(ctx, i0, i1, G.map);
+    for (const { sg } of shown) sg.junctions.drawLights(ctx, view);
     ctx.restore();
   }
 

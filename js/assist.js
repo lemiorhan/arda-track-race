@@ -21,8 +21,10 @@
   // up to sqrt(LAT * grip / k). A ring, a toll or a radar caps the speed around it too (TR.POINTS). The
   // limit at each sample is the lower of those and the speed from which the truck can still brake down to
   // every limit further on; bind is the sample whose own limit that is. Bends get a warning sign; points
-  // carry their own, and their sign text labels the samples they cap.
-  function prepare(road) {
+  // carry their own, and their sign text labels the samples they cap. exit {limit, v, label} is the speed
+  // to be under on leaving the segment, and the banner for the samples it binds (bind EXIT).
+  const EXIT = -1;
+  function prepare(road, exit) {
     const n = road.n, hs = road.hs, w = A.WIN;
     const grip = (i) => (road.route.grip || 1) * road.gripAt(i * DS);
     const safe = new Float64Array(n).fill(Infinity);
@@ -41,7 +43,7 @@
       } else bends.push({ s0: s, s1: s, v: safe[i] });
     }
     for (const b of bends) {
-      road.signList.push({ s: Math.max(TR.ROAD.START_LINE + 200, b.s0 - A.SIGN_LEAD), text: '⚠ ' + signKmh(b.v) + ' km/s', bg: '#e65100' });
+      road.signList.push({ s: Math.max(road.isStart ? TR.ROAD.START_LINE + 200 : 0, b.s0 - A.SIGN_LEAD), text: '⚠ ' + signKmh(b.v) + ' km/s', bg: '#e65100' });
     }
     const label = new Array(n).fill('VİRAJ');
     for (const j of road.points) {
@@ -56,27 +58,29 @@
     }
 
     const limit = new Float64Array(n), bind = new Int32Array(n);
-    limit[n - 1] = safe[n - 1];
-    bind[n - 1] = n - 1;
+    const out = exit ? exit.limit : Infinity;
+    limit[n - 1] = Math.min(safe[n - 1], out);
+    bind[n - 1] = out < safe[n - 1] ? EXIT : n - 1;
     for (let i = n - 2; i >= 0; i--) {
       const decel = A.BRAKE_SHARE * T.BRAKE * grip(i);
       const reach = Math.sqrt(limit[i + 1] * limit[i + 1] + 2 * decel * DS);
       limit[i] = Math.min(safe[i], reach);
       bind[i] = safe[i] <= reach ? i : bind[i + 1];
     }
-    road.assist = { safe, limit, bind, label };
+    road.assist = { safe, limit, bind, label, exit: exit || null };
   }
 
   const sample = (road, s) => U.clamp(Math.round(s / DS), 0, road.n - 1);
 
   function limitAt(road, s) {
-    if (s >= road.length) return Infinity;
+    if (s >= road.length) return road.assist.exit ? road.assist.exit.limit : Infinity;
     return road.assist.limit[sample(road, s)];
   }
 
   // The bend or point whose speed limitAt(road, s) brakes down to, as {v, label}.
   function bindAt(road, s) {
     const a = road.assist, i = a.bind[sample(road, s)];
+    if (i === EXIT) return { v: a.exit.v, label: a.exit.label };
     return { v: a.safe[i], label: a.label[i] };
   }
 

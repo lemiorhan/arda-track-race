@@ -1,6 +1,6 @@
 'use strict';
 (function () {
-  const TR = window.TR, U = TR.U;
+  const TR = window.TR, U = TR.U, MAP = TR.MAP, JAM = TR.JAM;
   const LANE = TR.ROAD.LANE;
   const COLORS = ['#f4f4f4', '#26282b', '#c62828', '#1565c0', '#2e7d32', '#f9a825', '#6a1b9a', '#8d6e63', '#00838f', '#ef6c00', '#90a4ae'];
   const KINDS = [
@@ -21,17 +21,22 @@
   const DIRT_SLOW = 0.6;
   // A car keeps to a speed from which it stops PAD short of where the car ahead could stop, planning with
   // DECEL, a little under the braking update() gives it. laneFree leaves room to brake at DECEL too. YAW is
-  // the most place()'s lane-change yaw swings a car's corners out sideways.
-  const FOLLOW = { DECEL: 180, PAD: 12, YAW: 12 };
+  // the most place()'s lane-change yaw swings a car's corners out sideways. A sibling branch's car also counts
+  // where it will be AHEAD_T seconds on, so a car yields before two branches' lanes cross under them; two
+  // siblings' frames may disagree by up to SKEW on which of two such cars leads.
+  const FOLLOW = { DECEL: 180, PAD: 12, YAW: 12, AHEAD_T: 3, SKEW: 10 };
 
   // The fastest a car may go gap behind o (front to rear).
   const followV = (o, gap) => Math.sqrt((o.wreck ? 0 : o.v * o.v) + 2 * FOLLOW.DECEL * Math.max(0, gap - FOLLOW.PAD));
 
-  // Whether o, where it is or in the lane it is moving to, is side by side with a car c at lane offset d.
+  // Whether o, where it is, in the lane it is moving to or on its way there, is side by side with a car c at
+  // lane offset d.
   function inLaneOf(o, c, d) {
     const w = (o.wid + c.wid) / 2 + FOLLOW.YAW;
-    return Math.abs(o.d - d) < w || Math.abs(o.dTarget - d) < w;
+    return Math.abs(o.d - d) < w || Math.abs(o.dTarget - d) < w || (o.d - d) * (o.dTarget - d) < 0;
   }
+
+  const seen = (views, c, pad) => views.some((v) => c.x > v.x0 - pad && c.x < v.x1 + pad && c.y > v.y0 - pad && c.y < v.y1 + pad);
 
   class Traffic {
     constructor(road, route, seed, density, events) {
@@ -41,19 +46,26 @@
       this.onSpeed = route.onSpeed || 1;
       this.cars = [];
       this.ghosts = [];
-      const L = road.length - NO_TRAFFIC_TAIL;
+      // The traffics that meet this one at a node, as { traffic, k } with k the segment's flow; game.js sets them.
+      this.links = { next: [], prev: [], endSibs: [], startSibs: [] };
+      const L = road.atLot ? road.length - NO_TRAFFIC_TAIL : road.length;
       const count = { 1: Math.round(route.same * density), '-1': Math.round(route.oncoming * density) };
       this.target = { 1: Math.max(1, Math.round(count[1] * WINDOW_SHARE)), '-1': Math.max(1, Math.round(count[-1] * WINDOW_SHARE)) };
+      this.base = Object.assign({}, this.target);
+      // The segment's jams with their s spans (RoadMap.jamsOn's shape); game.js sets them.
+      this.jams = [];
+      this.time = 0;
+      // Only the start segment begins with cars on it, around the start line; respawn fills the others.
       for (const dir of [1, -1]) {
         const t = this.target[dir];
         const s0 = dir > 0 ? 1250 : 1400, span = TR.ROAD.START_S + WIN_AHEAD - s0;
         for (let k = 0; k < Math.round(count[dir] * POOL); k++) {
-          const c = this.makeCar(dir);
-          if (k < t) {
+          const c = this.makeCar(dir), placed = road.isStart && k < t;
+          if (placed) {
             this.setS(c, Math.min(L, s0 + ((k + 0.5 * this.rnd()) * span) / t));
             if (!this.laneFree(c, c.d, 120, 120)) { c.lane = 1 - c.lane; this.setS(c, c.s); }
           }
-          if (k >= t || !events.spawnOk(c)) { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
+          if (!placed || !events.spawnOk(c)) { c.dormant = this.rnd.range(0.2, 1.5); c.x = 1e9; c.y = 1e9; }
           this.cars.push(c);
         }
       }
@@ -123,11 +135,24 @@
       return this.events.shutAhead(c.dir, d, c.s, c.len / 2) === Infinity;
     }
 
-    update(dt, players, views, onHonk, junctions) {
+    // The fastest a same-direction car may go for the jams on at time: JAM.V inside one, braking to it before.
+    jamLimit(c, time) {
+      let v = Infinity;
+      if (c.dir < 0) return v;
+      for (const j of this.jams) {
+        if (!TR.RoadMap.jamOn(j, time) || c.s > j.s1) continue;
+        v = Math.min(v, c.s >= j.s0 ? JAM.V : Math.sqrt(JAM.V * JAM.V + 2 * JAM.DECEL * (j.s0 - c.s)));
+      }
+      return v;
+    }
+
+    update(dt, players, views, onHonk, junctions, time) {
+      this.time = time;
+      this.target[1] = this.jams.some((j) => TR.RoadMap.jamOn(j, time)) ? Math.round(this.base[1] * JAM.FILL) : this.base[1];
       const racers = players.filter((p) => p.phase === 'race');
       const minS = racers.length ? Math.min(...racers.map((p) => p.s)) : Infinity;
       const tail = this.road.length - NO_TRAFFIC_TAIL;
-      this.ghosts = junctions.ghosts();
+      this.ghosts = junctions.ghosts().concat(this.nodeGhosts());
       const ahead = this.cars.concat(this.ghosts);
       for (const c of this.cars) {
         if (c.dormant > 0) {
@@ -139,7 +164,7 @@
           if (moveWreck(c, dt)) this.respawn(c, racers, views);
           continue;
         }
-        let target = Math.min(c.vBase * (this.road.dirtAt(c.s) ? DIRT_SLOW : 1), junctions.carLimit(c), this.events.carLimit(c));
+        let target = Math.min(c.vBase * (this.road.dirtAt(c.s) ? DIRT_SLOW : 1), junctions.carLimit(c), this.events.carLimit(c), this.jamLimit(c, time));
         c.brake = false;
         const shut = this.events.shutAhead(c.dir, c.dTarget, c.s, c.len / 2);
         if (shut < Infinity) {
@@ -158,7 +183,13 @@
           if (o === c || o.dir !== c.dir || o.dormant > 0 || !inLaneOf(o, c, c.d)) continue;
           const k = Math.min(kc, this.road.stretchAt(o.s, c.d));
           const gap = (o.s - c.s) * c.dir - (o.len + c.len) / (2 * k);
-          if (gap <= -5) continue;
+          // Where two streams meet at a node with cars side by side, the car behind stops for the other to clear;
+          // between siblings, whose frames may disagree on that, a dead heat goes to the lower segment id.
+          if (gap <= -5) {
+            const rel = (o.s - c.s) * c.dir, side = o.node && gap > -(o.len + c.len) / k;
+            if (side && (o.sib === undefined ? rel > 0 : rel > FOLLOW.SKEW || (rel > -FOLLOW.SKEW && o.sib < this.road.seg.id))) target = 0;
+            continue;
+          }
           target = Math.min(target, followV(o, gap));
           if (gap < 110) target = Math.min(target, o.wreck ? 0 : gap < 30 ? o.v * 0.6 : o.v);
         }
@@ -207,30 +238,82 @@
         c.d = U.approach(c.d, c.dTarget, 38 * dt);
         this.place(c);
 
+        // Cars leave the network at the lot and the start; at any other node they run on into a linked segment.
+        const road = this.road;
+        if (c.dir > 0 && !road.atLot && c.s > road.length && this.handOff(c, this.links.next, () => c.s - road.length)) continue;
+        if (c.dir < 0 && !road.isStart && c.s < 0 && this.handOff(c, this.links.prev, (o) => o.road.length + c.s)) continue;
         const behind = c.s < minS - 750;
-        const out = c.dir > 0 ? c.s > tail : c.s < 300;
+        const out = c.dir > 0 ? c.s > (road.atLot ? tail : road.length) : c.s < (road.isStart ? 300 : 0);
         if (behind || out) this.respawn(c, racers, views);
       }
     }
 
+    // Moves c into one of the traffics in list, picked by flow, at the s at(traffic) gives; false when the
+    // picked one has no sleeper to take it.
+    handOff(c, list, at) {
+      if (!list.length) return false;
+      let pick = this.rnd() * list.reduce((a, l) => a + l.k, 0), to = list[list.length - 1];
+      for (const l of list) { pick -= l.k; if (pick <= 0) { to = l; break; } }
+      if (!to.traffic.adopt(c.dir, at(to.traffic), c, c.lane)) return false;
+      // It keeps its place for the rest of this update, so a respawn does not land on it.
+      this.ghosts.push({ s: c.s, d: c.d, dTarget: c.dTarget, dir: c.dir, v: c.v, len: c.len, wid: c.wid, wreck: null, node: true });
+      this.retire(c);
+      return true;
+    }
+
+    // The awake cars of linked segments within LINK_R of the node shared with this one, with s in this
+    // segment's frame, as ghosts like Junctions.ghosts; node and sib (a sibling's id) feed the side-by-side
+    // rule in update.
+    // A sibling's car counts twice: in its own lane, which past the node is this segment's lane of the same
+    // offset, and where it is, since siblings drift over each other's lanes as they part or meet. There its
+    // width is its footprint across this road, and its dTarget where it will be AHEAD_T on.
+    nodeGhosts() {
+      const out = [], road = this.road, len = road.length, R = MAP.LINK_R;
+      const add = (list, near, at, sib) => {
+        for (const { traffic } of list) {
+          const L = traffic.road.length;
+          for (const o of traffic.cars) {
+            if (o.dormant > 0 || !near(o.s, L)) continue;
+            const g = { s: at(o.s, L), d: o.d, dTarget: o.dTarget, dir: o.dir, v: o.v, len: o.len, wid: o.wid, wreck: o.wreck, node: true };
+            if (sib) g.sib = traffic.road.seg.id;
+            out.push(g);
+            if (!sib) continue;
+            const c = road.locate(o.x, o.y, -1), sin = Math.abs(Math.sin(o.h - c.h)), cos = Math.sqrt(1 - sin * sin);
+            const q = traffic.road.posAt(o.s + o.dir * o.v * FOLLOW.AHEAD_T, o.dTarget), f = road.locate(q.x, q.y, -1);
+            out.push(Object.assign({}, g, {
+              s: c.s, d: road.laneD(c.s, c.d), dTarget: road.laneD(f.s, f.d), len: o.len * cos + o.wid * sin, wid: o.wid * cos + o.len * sin,
+            }));
+          }
+        }
+      };
+      add(this.links.next, (s) => s < R, (s) => len + s, false);
+      add(this.links.prev, (s, L) => L - s < R, (s, L) => s - L, false);
+      add(this.links.endSibs, (s, L) => L - s < R, (s, L) => len - (L - s), true);
+      add(this.links.startSibs, (s) => s < R, (s) => s, true);
+      return out;
+    }
+
     respawn(c, racers, views) {
-      const tail = this.road.length - NO_TRAFFIC_TAIL;
+      const tail = this.road.atLot ? this.road.length - NO_TRAFFIC_TAIL : this.road.length;
       const short = racers
         .map((p) => ({ p, deficit: this.target[c.dir] - this.countNear(p.s, c.dir, c) }))
         .filter((w) => w.deficit > 0)
         .sort((a, b) => b.deficit - a.deficit);
       const dir = c.dir;
+      const queued = (j) => this.cars.filter((o) => o !== c && o.dir > 0 && o.dormant <= 0 && !o.wreck && o.s >= j.s0 && o.s <= j.s1).length;
       for (const { p } of short) {
+        const lo = p.s - WIN_BACK, hi = p.s + WIN_AHEAD;
+        const jam = dir > 0 && this.jams.find((j) => TR.RoadMap.jamOn(j, this.time) && j.s1 > lo && j.s0 < hi && queued(j) < (JAM.MIN_CARS * (j.s1 - j.s0)) / JAM.KM);
         for (let tries = 0; tries < 8; tries++) {
-          const s = p.s + (dir > 0 ? this.rnd.range(950, 2300) : this.rnd.range(1100, 2800));
-          if (s > tail) continue;
+          const s = jam && tries < 4 ? this.rnd.range(Math.max(jam.s0, lo), Math.min(jam.s1, hi)) : p.s + (dir > 0 ? this.rnd.range(950, 2300) : this.rnd.range(1100, 2800));
+          if (s < 0 || s > tail) continue;
           Object.assign(c, this.makeCar(dir));
           c.s = s;
           c.d = dir * (c.lane === 0 ? LANE / 2 : LANE * 1.5);
           c.dTarget = c.d;
+          c.v = Math.min(c.v, this.jamLimit(c, this.time));
           this.place(c);
-          const seen = views.some((v) => c.x > v.x0 - 120 && c.x < v.x1 + 120 && c.y > v.y0 - 120 && c.y < v.y1 + 120);
-          if (!seen && this.laneFree(c, c.d, 220, 220) && this.events.spawnOk(c)) return;
+          if (!seen(views, c, 120) && this.laneFree(c, c.d, 220, 220) && this.events.spawnOk(c)) return;
         }
       }
       c.dormant = 0.8;
@@ -241,12 +324,13 @@
       return collideCars(this.cars, players);
     }
 
-    // Puts a sleeping car of direction dir in the outer lane at s, looking and moving like `from`, a car
-    // that leaves a side road. Returns null when every car of that direction is awake.
-    adopt(dir, s, from) {
+    // Puts a sleeping car of direction dir in lane (the outer one unless given) at s, looking and moving like
+    // `from`, a car that leaves a side road or a linked segment. Returns null when every car of that direction
+    // is awake.
+    adopt(dir, s, from, lane = 1) {
       const c = this.cars.find((o) => o.dir === dir && o.dormant > 0);
       if (!c) return null;
-      Object.assign(c, this.makeCar(dir), { kind: from.kind, len: from.len, wid: from.wid, color: from.color, lane: 1 });
+      Object.assign(c, this.makeCar(dir), { kind: from.kind, len: from.len, wid: from.wid, color: from.color, lane });
       this.setS(c, s);
       c.v = from.v;
       return c;
@@ -413,6 +497,6 @@
   }
 
   // Side-road traffic (junctions.js) moves its own cars and shares how they follow, crash, wreck and look.
-  Object.assign(Traffic, { followV, inLaneOf, collideCars, moveWreck, drawCar });
+  Object.assign(Traffic, { followV, inLaneOf, collideCars, moveWreck, drawCar, NO_TRAFFIC_TAIL });
   TR.Traffic = Traffic;
 })();

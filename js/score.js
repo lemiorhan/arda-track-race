@@ -43,8 +43,8 @@
   // The last round of a match of several rounds counts RULES.finalMult times.
   TR.isFinalRound = (sr, round = sr.round) => sr.rounds > 1 && round === sr.rounds;
 
-  // Every second the winner saves under this par time is worth RULES.speedPerSec.
-  TR.parTime = (route) => Math.round(route.length / 120 + 120);
+  // Every second the winner saves under the par time of the map's shortest path is worth RULES.speedPerSec.
+  TR.parTime = (length) => Math.round(length / 120 + 120);
 
   TR.parkPrecision = (st) => {
     const a = U.clamp(1 - st.angleErr / TR.LOT.ANGLE_TOL, 0, 1);
@@ -79,7 +79,7 @@
     if (boxes) add('Doğru kutu × ' + boxes, boxes * RULES.perBox);
     if (G.winner === p) {
       add('Turu kazandı', RULES.win);
-      const spare = Math.floor(TR.parTime(G.route) - p.times.unload);
+      const spare = Math.floor(TR.parTime(G.map.shortest) - p.times.unload);
       if (spare > 0) add('Hız bonusu (' + spare + ' sn)', spare * RULES.speedPerSec);
     }
     if (p.crashes) add('Kaza × ' + p.crashes, p.crashes * RULES.crash);

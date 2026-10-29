@@ -186,7 +186,10 @@
   UI.mirrorMatchResult = () => showMatchResult(!firstSight(G.series.id + ':match'));
 
   // ---------- route select ----------
-  // "Tünel ×2 · Köprü", in the order the route meets them.
+  // A card's par is the theme's nominal span; the round's own map may run up to MAP.LEN_TOL longer.
+  const approxPar = (r) => '≈ ' + U.fmtTime(TR.parTime(r.length)).replace(/\.\d$/, '');
+
+  // "Tünel ×2 · Köprü": the theme's pool, which the round's map places anywhere on its segments.
   function featureList(r) {
     const seen = [];
     for (const f of r.features) {
@@ -207,8 +210,7 @@
         '<div class="route-tag">' + r.tag + '</div><h3>' + r.name + '</h3>' +
         '<div class="route-level" title="Zorluk ' + r.level + ' / 5">' +
         '<b>' + '●'.repeat(r.level) + '</b>' + '●'.repeat(5 - r.level) + '</div><p>' + r.desc + '</p>' +
-        '<div class="route-meta">' + (r.length / 10000).toFixed(1).replace('.', ',') + ' km · par ' +
-        U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '') + '</div>' +
+        '<div class="route-meta">≈ ' + (r.length / 10000).toFixed(1).replace('.', ',') + ' km · par ' + approxPar(r) + '</div>' +
         (r.features && r.features.length ? '<div class="route-feats">' + featureList(r) + '</div>' : '') +
         '<div class="picks"><span class="pk p1">1</span><span class="pk p2">2</span></div>';
       // Online, a click picks for the player at this machine only.
@@ -249,8 +251,8 @@
     $('ready1').textContent = UI.ready[0] ? 'HAZIR ✔' : 'Hazır mısın? (' + keys[0] + ')';
     $('ready2').textContent = UI.ready[1] ? 'HAZIR ✔' : 'Hazır mısın? (' + keys[1] + ')';
     $('pickNote').textContent = UI.picks[0] === UI.picks[1]
-      ? 'İki oyuncu da aynı rotayı seçti.'
-      : 'Farklı rotalar seçildi: ikiniz de hazır olunca yazı-tura atılacak.';
+      ? 'İki oyuncu da aynı haritayı seçti. Yollar her tur yeniden çizilir.'
+      : 'Farklı haritalar seçildi: ikiniz de hazır olunca yazı-tura atılacak.';
     G.previewIdx = UI.picks[ON.meIdx()];
     ON.share('routes', { picks: UI.picks, ready: UI.ready });
   }
@@ -377,7 +379,7 @@
 
   function fillHowto() {
     $('ruleBody').innerHTML = TR.scoreRuleRows().map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
-    $('parList').textContent = TR.ROUTES.map((r) => r.name + ' ' + U.fmtTime(TR.parTime(r)).replace(/\.\d$/, '')).join(' · ');
+    $('parList').textContent = TR.ROUTES.map((r) => r.name + ' ' + approxPar(r)).join(' · ');
   }
 
   function toggleFullscreen() {

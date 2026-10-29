@@ -25,10 +25,11 @@ function match(ri = 0, guestOpts = {}) {
   // a browser whose floats round differently could build them, so it shows only what the host sent.
   m.join = () => {
     m.guest = world('guest', guestOpts.size, guestOpts.view);
+    if (guestOpts.patch) guestOpts.patch(m.guest);
     const E = m.guest.TR.Events;
     m.guest.TR.Events = class extends E {
-      constructor(road, seed) {
-        super(road, seed + 1);
+      constructor(road, seed, ...rest) {
+        super(road, seed + 1, ...rest);
       }
     };
     m.guest.TR.Online.join(m.host.TR.Online.code);
@@ -73,13 +74,16 @@ function sameFrame(m, f) {
   for (let i = 0; i < h.length; i++) if (g[i] !== h[i]) assert.fail('frame ' + f + ' call ' + i + ': host ' + h[i] + ' · guest ' + g[i]);
 }
 
-// Puts both trucks in their lanes LEAD before s, going V: a fast way to every junction, radar and toll.
-function dropAt(m, s, LEAD = 900, V = 230) {
+// Puts both trucks on segment seg in their lanes LEAD before s, going V: a fast way to every junction,
+// radar and toll.
+function dropAt(m, seg, s, LEAD = 900, V = 230) {
   const { R, G } = { R: m.host.TR.ROAD, G: m.host.TR.Game };
+  const road = G.map.segs[seg].road;
   for (const p of G.players) {
-    const q = G.road.lanePos(s - LEAD, p.idx === 0 ? R.LANE / 2 : R.LANE * 1.5);
+    const q = road.lanePos(s - LEAD, p.idx === 0 ? R.LANE / 2 : R.LANE * 1.5);
     p.truck.place(q.x, q.y, q.h);
     p.truck.v = V;
+    p.seg = seg;
     p.hint = -1;
   }
 }
@@ -100,7 +104,8 @@ for (const ri of [0, 2, 4]) {
       if (f % 15) continue;
       sameFrame(m, f);
       compared++;
-      carsSeen += host.TR.Game.traffic.cars.filter((c) => c.dormant <= 0).length;
+      if (host.TR.Game.state !== 'play') continue;
+      for (const sg of host.TR.Game.map.segs) carsSeen += sg.traffic.cars.filter((c) => c.dormant <= 0).length;
     }
     // Floors: the comparison ran over a real round, with traffic and both trucks moving.
     assert.ok(compared >= 70, 'compared ' + compared);
@@ -108,7 +113,11 @@ for (const ri of [0, 2, 4]) {
     assert.ok(carsSeen > 0, 'no traffic was ever awake');
     assert.equal(host.TR.Game.state, 'play');
     // Driving with no steering, both trucks grind along the rail in the bends, so the bar is low.
-    for (const p of host.TR.Game.players) assert.ok(p.s > host.TR.ROAD.START_S + 300, p.name + ' only reached s=' + p.s);
+    const map = host.TR.Game.map;
+    for (const p of host.TR.Game.players) {
+      const done = map.shortest - map.distToLot(p.seg, p.s);
+      assert.ok(done > host.TR.ROAD.START_S + 300, p.name + ' only came ' + done + ' from the start');
+    }
     assert.notEqual(Math.round(host.TR.Game.players[1].truck.x), Math.round(host.TR.Game.players[0].truck.x));
   });
 }
@@ -121,7 +130,7 @@ test('a guest draws the same frames as its host at every roadside point', () => 
     host.down('KeyW');
     guest.down('ArrowUp');
     m.race();
-    for (const j of G.road.points) {
+    for (const { id: k, road, junctions } of G.map.segs) for (const j of road.points) {
       met[j.type]++;
       const side = j.type === 'cross' || j.type === 'ring';
       // Traffic and bends slow a truck down over a long run-up, so radars and tolls are met from close
@@ -130,17 +139,17 @@ test('a guest draws the same frames as its host at every roadside point', () => 
       if (side) {
         host.up('KeyW');
         guest.up('ArrowUp');
-        dropAt(m, j.s, 200, 0);
+        dropAt(m, k, j.s, 200, 0);
       } else {
         host.down('KeyW');
         guest.down('ArrowUp');
-        dropAt(m, j.s, 300, 280);
+        dropAt(m, k, j.s, 300, 280);
       }
-      const st = G.junctions.states.find((x) => x.j === j);
-      const onScreen = () => G.junctions.cars.some((c) => G.players.some((p) => Math.abs(c.x - p.cam.x) < 500 && Math.abs(c.y - p.cam.y) < 450));
+      const st = junctions.states.find((x) => x.j === j);
+      const onScreen = () => junctions.cars.some((c) => G.players.some((p) => Math.abs(c.x - p.cam.x) < 500 && Math.abs(c.y - p.cam.y) < 450));
       for (let f = 0; f < 60 * (side ? 12 : 6); f++) {
         m.step();
-        if (f % 10 === 0) sameFrame(m, 'route ' + ri + ' ' + j.type + '@' + j.s + ' +' + f);
+        if (f % 10 === 0) sameFrame(m, 'route ' + ri + ' seg ' + k + ' ' + j.type + '@' + j.s + ' +' + f);
         if (side && f % 10 === 0 && onScreen()) seen[j.type]++;
         if (j.type === 'radar' && st.flash > 0) seen.radar++;
         if (j.type === 'toll' && st.gates.some((q) => q.broken)) seen.toll++;
@@ -154,13 +163,227 @@ test('a guest draws the same frames as its host at every roadside point', () => 
   }
 });
 
+// Both trucks dropped before the first fork, each steered by its keys at a point AIM ahead on the westmost or
+// the eastmost branch, SIDE off its centre line. The segments are emptied of cars: in traffic the trucks end
+// up behind a car and the fork decides for them.
+const AIM = 600, SIDE = 60;
+let forkRun = null;
+function throughFork() {
+  if (forkRun) return forkRun;
+  const m = match(0), G = m.host.TR.Game, map = G.map, U = m.host.TR.U;
+  m.race();
+  const start = map.segs[map.start].road;
+  const midX = (k) => map.segs[k].road.xs[map.segs[k].road.n >> 1];
+  const outs = map.segs[map.start].out.slice().sort((a, b) => midX(a) - midX(b));
+  dropAt(m, map.start, start.length, 400, 200);
+  for (const sg of map.segs) sg.traffic.cars = [];
+  m.host.down('KeyW');
+  m.guest.down('ArrowUp');
+  const drivers = [
+    { w: m.host, left: 'KeyA', right: 'KeyD', seg: outs[0], side: -1, held: null, hint: -1 },
+    { w: m.guest, left: 'ArrowLeft', right: 'ArrowRight', seg: outs[outs.length - 1], side: 1, held: null, hint: -1 },
+  ];
+  const run = { compared: 0, diff: null, segDiff: null, left: [false, false], ends: null, outs };
+  for (let f = 0; f < 60 * 12; f++) {
+    G.players.forEach((p, i) => {
+      const dr = drivers[i], t = p.truck, road = map.segs[dr.seg].road;
+      const loc = road.locate(t.x, t.y, dr.hint);
+      dr.hint = loc.i;
+      const q = road.posAt(U.clamp(loc.s + AIM, 0, road.length), dr.side * SIDE);
+      const goal = U.clamp(2 * U.wrap(Math.atan2(q.y - t.y, q.x - t.x) - t.th), -0.4, 0.4);
+      const want = t.steer < goal - 0.04 ? dr.right : t.steer > goal + 0.04 ? dr.left : null;
+      if (want === dr.held) return;
+      if (dr.held) dr.w.up(dr.held);
+      if (want) dr.w.down(want);
+      dr.held = want;
+    });
+    m.step();
+    G.players.forEach((p, i) => (run.left[i] = run.left[i] || p.seg !== map.start));
+    if (f % 15) continue;
+    run.compared++;
+    try {
+      sameFrame(m, f);
+    } catch (e) {
+      run.diff = run.diff || e.message;
+    }
+    const gs = m.guest.TR.Game.players.map((p) => p.seg), hs = G.players.map((p) => p.seg);
+    if (!run.segDiff && gs.join() !== hs.join()) run.segDiff = 'frame ' + f + ': host ' + hs + ' · guest ' + gs;
+  }
+  run.ends = G.players.map((p) => p.seg);
+  return (forkRun = run);
+}
+
+test('a guest draws the same frames as its host through a fork', () => {
+  const run = throughFork();
+  assert.equal(run.diff, null);
+  assert.ok(run.left.every(Boolean), 'a truck never left the start segment: ' + run.left);
+  assert.ok(run.outs.length > 1, 'the start segment does not fork');
+  assert.notEqual(run.ends[0], run.ends[1], 'both trucks took segment ' + run.ends[0]);
+  assert.ok(run.compared >= 40, 'compared ' + run.compared);
+});
+
+test('a guest has each truck on the segment the host has it on', () => {
+  const run = throughFork();
+  assert.equal(run.segDiff, null);
+  assert.ok(run.left.every(Boolean) && run.compared >= 40, 'no truck left the start segment, or too few frames');
+});
+
+// The host clock is moved to just before a jam, with both trucks on their way into it.
+test('a guest draws the same frames as its host through a jam', () => {
+  const m = match(0), G = m.host.TR.Game;
+  m.race();
+  const jam = G.map.spec.jams[0], road = G.map.segs[jam.seg].road, s0 = road.sAtRise(jam.rise0), s1 = road.sAtRise(jam.rise1);
+  G.time = jam.t0 - 1;
+  dropAt(m, jam.seg, s0, 500, 150);
+  m.host.down('KeyW');
+  m.guest.down('ArrowUp');
+  const traffic = G.map.segs[jam.seg].traffic;
+  let on = 0, queued = 0;
+  for (let f = 0; f < 60 * 12; f++) {
+    m.step();
+    if (f % 10) continue;
+    sameFrame(m, 'jam +' + f);
+    if (!G.map.jamsOn(jam.seg, G.time).length) continue;
+    on++;
+    if (traffic.cars.some((c) => c.dormant <= 0 && c.s >= s0 && c.s <= s1 && G.players.some((p) => Math.abs(c.x - p.cam.x) < 500 && Math.abs(c.y - p.cam.y) < 450))) queued++;
+  }
+  assert.ok(on >= 30, 'the jam was on in only ' + on + ' compared frames');
+  assert.ok(queued > 0, 'no jam car was ever on screen');
+});
+
+const onScreen = (G, q) => G.players.some((p) => Math.abs(q.x - p.cam.x) < 500 && Math.abs(q.y - p.cam.y) < 450);
+const flockSeg = (G) => G.map.segs.find((sg) => sg.events.flocks.length);
+const workSeg = (G) => G.map.segs.find((sg) => sg.events.works.length);
+
+// Holds the trucks before a flock off the start segment until its sheep are on their way, comparing frames.
+function meetFlock(m, onFrame) {
+  const G = m.host.TR.Game, sg = flockSeg(G), f = sg.events.flocks[0];
+  dropAt(m, sg.id, f.s, 800, 120);
+  m.host.down('KeyW');
+  m.guest.down('ArrowUp');
+  for (let f2 = 0; f2 < 60 * 4; f2++) {
+    m.step();
+    onFrame(f2, sg, f);
+  }
+}
+
+// A flock off the start segment, crossing with racers near, and roadworks with a truck driven through the
+// closed lane, on two routes: the guest is shown sheep that walk and cones that fly.
+test('a guest draws the same frames as its host at a flock and at roadworks', () => {
+  let routes = 0, walking = 0, flying = 0, offStart = 0;
+  for (const ri of [0, 2]) {
+    const m = match(ri), G = m.host.TR.Game, R = m.host.TR.ROAD;
+    m.race();
+    if (!flockSeg(G) || !workSeg(G)) continue;
+    routes++;
+    if (flockSeg(G).id !== G.map.start && workSeg(G).id !== G.map.start) offStart++;
+    meetFlock(m, (f2, sg, f) => {
+      if (f2 % 10) return;
+      sameFrame(m, 'route ' + ri + ' flock on seg ' + sg.id + ' +' + f2);
+      if (f.sheep.some((q) => q.moving && onScreen(G, q))) walking++;
+    });
+    const sg = workSeg(G), w = sg.events.works[0];
+    for (const p of G.players) {
+      const q = sg.road.lanePos(w.s0 - 400, p.idx === 1 ? w.d : -w.d);
+      p.truck.place(q.x, q.y, q.h);
+      p.truck.v = 220;
+      p.seg = sg.id;
+      p.hint = -1;
+    }
+    for (let f2 = 0; f2 < 60 * 3; f2++) {
+      sg.traffic.cars = [];
+      m.step();
+      if (f2 % 10) continue;
+      sameFrame(m, 'route ' + ri + ' roadworks on seg ' + sg.id + ' +' + f2);
+      if (w.cones.some((c) => c.fly && onScreen(G, c))) flying++;
+    }
+  }
+  assert.equal(routes, 2, 'a route has no flock or no roadworks');
+  assert.equal(offStart, 2, 'a flock or roadworks is on the start segment');
+  assert.ok(walking > 0, 'no compared frame showed a walking sheep');
+  assert.ok(flying > 0, 'no compared frame showed a flying cone');
+});
+
+// The guest draws INTERP_MS behind the host, between two snapshots: everything that moves smoothly is put
+// k of the way from the older to the newer, segment by segment. The expected place is worked out here from
+// the two snapshots' own rows.
+test('a guest blends the trucks and each segment\'s cars, side cars, sheep and clocks between two snapshots', () => {
+  const m = match(1), G = m.host.TR.Game, O = m.host.TR.Online, gG = m.guest.TR.Game;
+  m.race();
+  const sideSeg = G.map.segs.find((sg) => sg.id !== G.map.start && sg.road.points.some((j) => j.type === 'cross' || j.type === 'ring'));
+  assert.ok(sideSeg, 'route 1 has no crossing or ring off the start segment');
+  const j = sideSeg.road.points.find((q) => q.type === 'cross' || q.type === 'ring');
+  const K = 0.3, lerp = (a, b) => a + (b - a) * K, near = (a, b) => Math.abs(a - b) < 1e-6;
+  const moved = { cars: new Set(), jcars: 0, sheep: 0, trucks: 0 };
+  const blend = (ready) => {
+    for (let f = 0; f < 60 * 12 && !ready(); f++) m.step();
+    const a = O.dec(O.enc(O.snapshot()));
+    for (let f = 0; f < 6; f++) m.step();
+    const b = O.dec(O.enc(O.snapshot()));
+    m.guest.TR.Online.applySnap(b, a, K);
+    assert.ok(near(gG.time, lerp(a.g.time, b.g.time)) && a.g.time !== b.g.time, 'the round clock');
+    gG.players.forEach((p, i) => {
+      const t0 = a.p[i].truck, t1 = b.p[i].truck;
+      assert.ok(near(p.truck.x, lerp(t0.x, t1.x)) && near(p.truck.y, lerp(t0.y, t1.y)), 'truck ' + i);
+      if (t0.y !== t1.y) moved.trucks++;
+    });
+    gG.map.segs.forEach((sg, k) => {
+      assert.ok(near(sg.junctions.time, lerp(a.jt, b.jt)) && a.jt !== b.jt, 'junction clock of segment ' + k);
+      assert.ok(near(sg.events.time, lerp(a.et, b.et)) && a.et !== b.et, 'event clock of segment ' + k);
+      for (const [rows, was, got, what] of [[b.cars[k], a.cars[k], sg.traffic.cars, 'car'], [b.jcars[k], a.jcars[k], sg.junctions.cars, 'side car']]) {
+        rows.forEach((r, i) => {
+          const p = was.find((q) => q[0] === r[0]);
+          if (!p) return;
+          assert.ok(near(got[i].x, lerp(p[1], r[1])) && near(got[i].y, lerp(p[2], r[2])), what + ' ' + r[0] + ' of segment ' + k);
+          if (p[1] === r[1] && p[2] === r[2]) return;
+          if (what === 'car' && k !== gG.map.start) moved.cars.add(k);
+          if (what === 'side car') moved.jcars++;
+        });
+      }
+      sg.events.flocks.forEach((f, fi) => f.sheep.forEach((q, si) => {
+        const r = b.sheep[k][fi][si], p = a.sheep[k][fi][si];
+        assert.ok(near(q.x, lerp(p[0], r[0])) && near(q.y, lerp(p[1], r[1])), 'sheep ' + si + ' of segment ' + k);
+        if (p[0] !== r[0] || p[1] !== r[1]) moved.sheep++;
+      }));
+    });
+  };
+  dropAt(m, flockSeg(G).id, flockSeg(G).events.flocks[0].s, 800, 120);
+  m.host.down('KeyW');
+  m.guest.down('ArrowUp');
+  blend(() => flockSeg(G).events.flocks[0].sheep.some((q) => q.moving && q.wait <= 0));
+  m.host.up('KeyW');
+  m.guest.up('ArrowUp');
+  dropAt(m, sideSeg.id, j.s, 200, 0);
+  blend(() => sideSeg.junctions.cars.length > 0);
+  assert.ok(moved.cars.size > 0, 'no car off the start segment moved between the snapshots');
+  assert.ok(moved.jcars > 0, 'no side car moved between the snapshots');
+  assert.ok(moved.sheep > 0, 'no sheep moved between the snapshots');
+  assert.ok(moved.trucks > 0, 'no truck moved between the snapshots');
+});
+
+test('a guest builds the host map, not its own', () => {
+  const patch = (w) => {
+    const generate = w.TR.MapGen.generate;
+    w.TR.MapGen.generate = (route, seed) => generate(route, seed + 1);
+  };
+  const m = match(1, { patch }), h = m.host.TR.Game;
+  const spec = JSON.stringify(h.map.spec);
+  assert.notEqual(JSON.stringify(m.guest.TR.MapGen.generate(h.route, h.roundOpts.seed)), spec, 'the guest would generate the host map anyway');
+  assert.equal(JSON.stringify(m.guest.TR.Game.map.spec), spec, 'at the first join');
+  m.race();
+  m.join();
+  for (let f = 0; f < 5; f++) m.step();
+  assert.equal(JSON.stringify(m.guest.TR.Game.map.spec), spec, 'after a rejoin');
+});
+
 // A guest showing only its own truck on a smaller screen sees less than the host's halves do; cars must
 // still not pop up inside what it sees.
 test('the host spawns traffic out of sight of the guest screen too', () => {
   const m = match(0, { size: { width: 900, height: 560 }, view: 'tek' });
   const views = [];
-  const update = m.host.TR.Game.traffic.update.bind(m.host.TR.Game.traffic);
-  m.host.TR.Game.traffic.update = (dt, players, vs, ...rest) => (views.push(vs), update(dt, players, vs, ...rest));
+  const G = m.host.TR.Game, traffic = G.map.segs[G.map.start].traffic;
+  const update = traffic.update.bind(traffic);
+  traffic.update = (dt, players, vs, ...rest) => (views.push(vs), update(dt, players, vs, ...rest));
   m.race();
   for (let f = 0; f < 30; f++) m.step();
   const last = views[views.length - 1];
@@ -510,7 +733,13 @@ test('the guest takes the host round layout over its own', () => {
   const { host, guest } = match(1);
   const h = host.TR.Game, g = guest.TR.Game;
   assert.equal(g.roundOpts.seed, h.roundOpts.seed);
-  assert.equal(JSON.stringify(g.road.signList), JSON.stringify(h.road.signList));
-  assert.equal(JSON.stringify(g.events.works), JSON.stringify(h.events.works));
-  assert.ok(h.road.signList.length > 0 && h.events.works.length + h.events.flocks.length > 0);
+  assert.equal(g.map.segs.length, h.map.segs.length);
+  const flocks = (G) => G.map.segs.reduce((n, sg) => n + sg.events.flocks.length, 0);
+  h.map.segs.forEach((sg, k) => {
+    assert.equal(JSON.stringify(g.map.segs[k].road.signList), JSON.stringify(sg.road.signList), 'signs of segment ' + k);
+    assert.equal(JSON.stringify(g.map.segs[k].events.works), JSON.stringify(sg.events.works), 'works of segment ' + k);
+    assert.equal(JSON.stringify(g.map.segs[k].events.flocks), JSON.stringify(sg.events.flocks), 'flocks of segment ' + k);
+  });
+  assert.ok(h.map.segs.some((sg) => sg.id !== h.map.start && sg.road.signList.length > 0), 'no sign off the start segment to compare');
+  assert.ok(h.map.segs.some((sg) => sg.events.works.length > 0) && flocks(h) > 0, 'no roadworks or no flock to compare');
 });

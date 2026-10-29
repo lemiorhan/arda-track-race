@@ -10,8 +10,15 @@
   TR.KEYNAMES = KEYNAMES;
   const PHASE = { race: 'YARIŞ', park: 'PARK', unload: 'BOŞALTMA', done: 'BİTTİ' };
   const MAP_MARK = {
-    bridge: '#4fc3f7', dirt: '#a1887f', tunnel: '#78909c', cross: '#ffd54f', ring: '#81c784', toll: '#ba68c8', radar: '#ef5350',
+    bridge: '#4fc3f7', dirt: '#a1887f', tunnel: '#78909c', narrow: '#ffb74d', cross: '#ffd54f', ring: '#81c784', toll: '#ba68c8', radar: '#ef5350',
   };
+  // The nav map grows from SMALL to LARGE (capped at VH of the view's height) as a fork comes within GROW_AT,
+  // over GROW_LEN, and shrinks the same way past it. A segment's colour is its flow class: below QUIET, from
+  // BUSY up, or normal between; active jams go over it in JAM. Polylines take every STEP-th sample.
+  const NAV = (TR.NAV = {
+    SMALL: { w: 64, h: 240 }, LARGE: { w: 150, h: 400 }, VH: 0.55, GROW_AT: 6000, GROW_LEN: 3000, STEP: 25, PAD: 8, TEXT: 20,
+    QUIET: 0.55, BUSY: 1.2, COLOR: { quiet: '#66bb6a', normal: '#e0e0e0', busy: '#ffa726' }, JAM: '#ff1744',
+  });
   const TARGET_COL = 44;
   const targetPanelW = (un) => Math.max(220, un.target.length * TARGET_COL + 28);
 
@@ -100,7 +107,7 @@
     const h = final ? 178 : 148;
     panel(ctx, x, y, w, h);
     text(ctx, 'TUR ' + sr.round + ' / ' + sr.rounds, cx, y + 26, 24, '#fff', 'center', '900');
-    const km = (g.route.length / 10000).toFixed(1).replace('.', ',') + ' km';
+    const km = (g.map.shortest / 10000).toFixed(1).replace('.', ',') + ' km';
     text(ctx, g.route.name + ' · ' + km + ' · ' + TR.Light.WEATHERS[g.weather], cx, y + 52, 14, '#b7c0c8', 'center', '600');
     text(ctx, 'Toplam puan', cx, y + 76, 12, '#b7c0c8', 'center', '700');
     text(ctx, p.name + '  ' + sr.totals[p.idx] + '   ·   ' + o.name + '  ' + sr.totals[o.idx], cx, y + 99, 18, '#ffd54f', 'center', '800');
@@ -139,7 +146,7 @@
     text(ctx, 'Kaza: ' + p.crashes + (p.offroad ? '   · yol dışı' : ''), vp.x + 30, vp.y + vp.h - 30, 15,
       p.offroad ? '#ffb74d' : '#cfd8dc', 'left', '700');
     if (p.draft > 0.3) banner(ctx, 'RÜZGÂR TÜNELİ', vp.x + 112, vp.y + vp.h - 134, 15, '#b3e5fc');
-    drawMinimap(ctx, vp, p, g);
+    drawNav(ctx, vp, p, g);
     drawBendWarning(ctx, vp, p, g);
   }
 
@@ -148,7 +155,8 @@
   function drawBendWarning(ctx, vp, p, g) {
     if (p.assist === 'kapali') return;
     const t = p.truck, x = vp.x + vp.w / 2, y = vp.y + 112;
-    const front = p.s + TR.TRUCK.CAB_FRONT, lim = TR.Assist.limitAt(g.road, front);
+    const road = g.map.segs[p.seg].road;
+    const front = p.s + TR.TRUCK.CAB_FRONT, lim = TR.Assist.limitAt(road, front);
     const red = TR.Assist.redLimit(p, p.redAhead);
     if (red < lim) {
       if (p.autoT > 0) banner(ctx, 'OTO FREN · KIRMIZI IŞIK', x, y, 24, '#80d8ff');
@@ -156,58 +164,96 @@
       return;
     }
     if (t.v <= lim + 4 && p.autoT <= 0) return;
-    const next = TR.Assist.bindAt(g.road, front);
+    const next = TR.Assist.bindAt(road, front);
     if (next.v === Infinity) return;
     const kmh = TR.Assist.signKmh(next.v) + ' km/s';
     if (p.autoT > 0) banner(ctx, 'OTO FREN · ' + kmh, x, y, 24, '#80d8ff');
     else banner(ctx, next.label + '! YAVAŞLA · ' + kmh, x, y, 24, '#ffb74d');
   }
 
-  function drawMinimap(ctx, vp, p, g) {
-    const road = g.road, L = road.length;
-    const h = Math.min(420, vp.h * 0.55), top = vp.y + 90, cx = vp.x + vp.w - 46;
-    panel(ctx, cx - 26, top - 12, 52, h + 40);
-    const sc = h / L;
-    ctx.strokeStyle = 'rgba(255,255,255,0.65)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    for (let i = 0; i < road.n; i += 25) {
-      const x = cx + U.clamp((road.xs[i] - road.xs[0]) * sc, -18, 18);
-      const y = top + h - i * TR.ROAD.DS * sc;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  const progress = (q, g) => U.clamp(1 - g.map.distToLot(q.seg, q.s) / g.map.shortest, 0, 1);
+
+  function forkDist(p, g) {
+    const sg = g.map.segs[p.seg];
+    const ahead = sg.out.length > 1 ? sg.road.length - p.s : Infinity;
+    return Math.min(ahead, sg.links.startSibs.length ? p.s : Infinity);
+  }
+
+  function navSize(p, g) {
+    const k = U.smooth((NAV.GROW_AT - forkDist(p, g)) / NAV.GROW_LEN);
+    return { w: U.lerp(NAV.SMALL.w, NAV.LARGE.w, k), h: U.lerp(NAV.SMALL.h, NAV.LARGE.h, k) };
+  }
+
+  const flowColor = (flow) => NAV.COLOR[flow < NAV.QUIET ? 'quiet' : flow >= NAV.BUSY ? 'busy' : 'normal'];
+
+  // The whole map north-up, each axis fitted to the panel on its own: a map is many times taller than wide.
+  function drawNav(ctx, vp, p, g) {
+    const map = g.map, sz = navSize(p, g), w = sz.w, h = Math.min(sz.h, vp.h * NAV.VH);
+    const x = vp.x + vp.w - 12 - w, y = vp.y + 78;
+    panel(ctx, x, y, w, h);
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+    for (const sg of map.segs) {
+      const b = sg.road.bbox;
+      bx0 = Math.min(bx0, b.x0); by0 = Math.min(by0, b.y0); bx1 = Math.max(bx1, b.x1); by1 = Math.max(by1, b.y1);
     }
-    ctx.stroke();
-    const mx = (s) => cx + U.clamp((road.xs[Math.min(road.n - 1, Math.floor(s / TR.ROAD.DS))] - road.xs[0]) * sc, -18, 18);
-    for (const sec of road.sections) {
-      ctx.fillStyle = MAP_MARK[sec.type];
-      ctx.fillRect(mx((sec.s0 + sec.s1) / 2) - 6, top + h - sec.s1 * sc, 12, Math.max(3, (sec.s1 - sec.s0) * sc));
-    }
-    for (const j of road.points) {
-      ctx.fillStyle = MAP_MARK[j.type];
-      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-      ctx.lineWidth = 1;
+    const iw = w - 2 * NAV.PAD, ih = h - 2 * NAV.PAD - NAV.TEXT;
+    const at = (q) => ({ x: x + NAV.PAD + ((q.x - bx0) / (bx1 - bx0)) * iw, y: y + NAV.PAD + ((q.y - by0) / (by1 - by0)) * ih });
+    const line = (road, i0, i1) => {
       ctx.beginPath();
-      ctx.arc(mx(j.s), top + h - j.s * sc, 4, 0, 6.283);
-      ctx.fill();
+      for (let i = i0; ; i = Math.min(i + NAV.STEP, i1)) {
+        const q = at({ x: road.xs[i], y: road.ys[i] });
+        if (i === i0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+        if (i === i1) break;
+      }
       ctx.stroke();
+    };
+    ctx.lineWidth = 3;
+    for (const sg of map.segs) {
+      ctx.strokeStyle = flowColor(sg.spec.flow);
+      line(sg.road, 0, sg.road.n - 1);
     }
+    ctx.lineWidth = 5;
+    for (const sg of map.segs) {
+      const road = sg.road, idx = (s) => U.clamp(Math.round(s / TR.ROAD.DS), 0, road.n - 1);
+      for (const j of map.jamsOn(sg.id, g.time)) {
+        ctx.strokeStyle = NAV.JAM;
+        line(road, idx(j.s0), idx(j.s1));
+      }
+    }
+    for (const sg of map.segs) {
+      const road = sg.road;
+      for (const sec of road.sections) {
+        const a = at(road.posAt(sec.s0, 0)), b = at(road.posAt(sec.s1, 0));
+        ctx.fillStyle = MAP_MARK[sec.type];
+        ctx.fillRect((a.x + b.x) / 2 - 4, b.y, 8, Math.max(3, a.y - b.y));
+      }
+      for (const j of road.points) {
+        const c = at(road.posAt(j.s, 0));
+        ctx.fillStyle = MAP_MARK[j.type];
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 3.5, 0, 6.283);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    const lot = at(map.nodes[map.segs[map.lotSeg].spec.b]);
     ctx.fillStyle = '#90caf9';
-    ctx.fillRect(cx - 9, top - 6, 18, 10);
+    ctx.fillRect(lot.x - 9, lot.y - 5, 18, 10);
     for (const q of g.players) {
-      const s = q.phase === 'race' ? U.clamp(q.s, 0, L) : L;
-      const i = Math.min(road.n - 1, Math.floor(s / TR.ROAD.DS));
-      const x = cx + U.clamp((road.xs[i] - road.xs[0]) * sc, -18, 18);
-      const y = top + h - s * sc;
+      const road = map.segs[q.seg].road;
+      const c = at(road.posAt(q.phase === 'race' ? U.clamp(q.s, 0, road.length) : road.length, 0));
       ctx.fillStyle = q.color;
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = q === p ? 3 : 1.5;
       ctx.beginPath();
-      ctx.arc(x, y, q === p ? 7 : 5, 0, 6.283);
+      ctx.arc(c.x, c.y, q === p ? 6 : 4, 0, 6.283);
       ctx.fill();
       ctx.stroke();
     }
-    const pct = Math.round(U.clamp(p.s / L, 0, 1) * 100);
-    text(ctx, '%' + pct, cx, top + h + 16, 12, '#cfd8dc', 'center', '700');
+    const pct = Math.round(progress(p, g) * 100);
+    text(ctx, '%' + pct, x + w / 2, y + h - NAV.PAD - NAV.TEXT / 2, 12, '#cfd8dc', 'center', '700');
   }
 
   function drawPark(ctx, vp, p, g) {
@@ -332,7 +378,7 @@
   function drawRival(ctx, vp, p, g) {
     if (g.state === 'countdown') return;
     const o = g.players[1 - p.idx];
-    const where = o.phase === 'race' ? '%' + Math.round(U.clamp(o.s / g.road.length, 0, 1) * 100) : PHASE[o.phase];
+    const where = o.phase === 'race' ? '%' + Math.round(progress(o, g) * 100) : PHASE[o.phase];
     const s = o.name + ' · ' + where + ' · ' + g.rankOf(o) + '.';
     ctx.font = '800 13px ' + FONT;
     const w = ctx.measureText(s).width + 34, cx = Math.max(vp.x + vp.w / 2, vp.x + 390), y = vp.y + 74;
@@ -344,5 +390,5 @@
     text(ctx, s, cx + 7, y + 12, 13, '#eceff1', 'center', '800');
   }
 
-  TR.HUD = { draw, drawRival };
+  TR.HUD = { draw, drawRival, drawNav, navSize };
 })();

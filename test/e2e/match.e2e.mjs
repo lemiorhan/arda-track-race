@@ -51,6 +51,8 @@ try {
   await press(H, 'Space');
   await press(Gp, 'Space');
   await H.waitForFunction(() => TR.Game.state === 'play', null, { timeout: 15000 });
+  const spec = (p) => p.evaluate(() => JSON.stringify(TR.Game.map.spec));
+  check(await spec(Gp) === await spec(H), 'guest builds the host map');
 
   // Parks player i in its bay; the game then starts unloading. Unloading is then finished by hand.
   const park = (i) => H.evaluate((i) => {
@@ -107,8 +109,9 @@ try {
   Gp = await open('guest2');
   await join(Gp);
   await H.waitForFunction(() => document.getElementById('netwait').classList.contains('hidden'), null, { timeout: 10000 });
-  await Gp.waitForFunction(() => !!TR.Game.road && TR.UI.current === 'pause', null, { timeout: 5000 });
+  await Gp.waitForFunction(() => !!TR.Game.map &&TR.UI.current === 'pause', null, { timeout: 5000 });
   check(true, 'reloaded guest is back in the paused round');
+  check(await spec(Gp) === await spec(H), 'reloaded guest builds the host map');
   await press(H, 'Escape');
   await Gp.waitForFunction(() => TR.Game.state === 'play' && TR.UI.current === null, null, { timeout: 5000 });
   await Gp.keyboard.down('ArrowUp');

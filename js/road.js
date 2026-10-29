@@ -3,19 +3,34 @@
   const TR = window.TR, U = TR.U;
   const DS = 8;
   const LANE = 54, HALF = 108, RAIL = 150;
-  TR.ROAD = { DS, LANE, HALF, RAIL, START_S: 700, START_LINE: 800 };
+  // MAX_DEV bounds the heading's deviation from north; END_FLAT is how far a segment runs straight north
+  // out of each of its nodes.
+  // A section's or point's sign stands SIGN_LEAD before it.
+  const MAX_DEV = 1.1, END_FLAT = 1000, SIGN_LEAD = 350;
+  TR.ROAD = { DS, LANE, HALF, RAIL, START_S: 700, START_LINE: 800, MAX_DEV, END_FLAT, SIGN_LEAD };
 
   // Road sections a route can carry over [s0, s1). rail is the barrier's (or wall's) distance from the
-  // centre line and eases from RAIL over TAPER either side; grip scales the route's own grip.
+  // centre line and eases from RAIL over TAPER either side; grip scales the route's own grip. A narrow
+  // road's rail stands just past the asphalt's edge, inside a bridge's.
   const TAPER = 160;
   const SECTIONS = (TR.SECTIONS = {
     bridge: { rail: HALF + 16, grip: 1, sign: 'KÖPRÜ', name: 'Köprü' },
     dirt: { rail: RAIL, grip: 0.65, sign: 'TOPRAK YOL', name: 'Toprak yol' },
     tunnel: { rail: HALF + 18, grip: 1, sign: 'TÜNEL', name: 'Tünel' },
+    narrow: { rail: HALF + 8, grip: 1, sign: 'DAR YOL', name: 'Dar yol' },
   });
   const DIRT = '#a27c52', DECK = '#9aa0a6', ROCK = '#6d665e', WATER = '#2b86c5';
   // A distance-to-the-lot sign stands every PARK_SIGN along the road.
   const PARK_SIGN = 3000;
+  // A rail post is dropped where it stands within RAIL + POST_GAP of another segment: negative, so posts on
+  // a rail two coincident siblings share are kept.
+  const POST_GAP = -4;
+  // Where siblings overlap at a node the lowest-id one draws the lane markings; another's marking is dropped
+  // within MARK_CLEAR of a lower sibling's centre line, so no second set runs beside the first.
+  const MARK_CLEAR = HALF + LANE / 2;
+  // A sign's box is sized without a canvas from SIGN_GLYPH, a bound on the advance of the bold 18px glyphs
+  // its texts use, and SIGN_HH, its half height with the shadow; it stands SIGN_GAP clear of its own rail.
+  const SIGN_GLYPH = 13, SIGN_GAP = 10, SIGN_HH = 18;
 
   // Junction geometry. A side road's asphalt reaches SIDE_HW either side of its centre line and its
   // barrier SIDE_RAIL; it runs SIDE_LEN out from the main road's centre. A ring's island has radius RING_R,
@@ -42,26 +57,30 @@
   TR.featureName = (f) => (SECTIONS[f.type] || POINTS[f.type]).name;
 
   // tight scales the bend wavelength (lower is sharper), grip scales the truck's cornering
-  // and braking, onSpeed scales oncoming car speed. level is the 1-5 shown on the route card.
+  // and braking, onSpeed scales oncoming car speed. level is the 1-5 shown on the route card. mapRecipe
+  // draws the round's network (js/map.js): braid count, alternatives per braid and the widest detour.
   TR.ROUTES = [
     {
       id: 'sahil', name: 'Sahil Yolu', tag: 'Yoğun trafik', level: 3,
-      desc: 'Deniz kenarında kıvrımlı yol. İki yönde de araç dolu, sollamak için boşluk kollayın.',
-      length: 24000, curvy: 0.8, tight: 0.75, same: 22, oncoming: 18, seed: 1907,
+      desc: 'Deniz kenarında kıvrımlı yollar. Kalabalık yolda iki yönde de araç dolu, sollamak için boşluk kollayın. Kestirme kısadır ama bir bedeli vardır.',
+      length: 48000, curvy: 0.8, tight: 0.75, same: 22, oncoming: 18, seed: 1907,
+      mapRecipe: { braids: [3, 3], alts: [2, 3], spread: 2200 },
       theme: { grass: '#8db650', patch: '#7fa647', decor: 'palm', density: 0.55, sea: true },
       features: [{ type: 'toll', s: 4500 }, { type: 'bridge', s0: 9000, s1: 10400 }, { type: 'radar', s: 16500, kmh: 70 }],
     },
     {
       id: 'ova', name: 'Ova Yolu', tag: 'Uzun ve kalabalık', level: 3,
-      desc: 'Uzun bir yol. Yavaş kamyon ve otobüs kuyrukları, sık sık karşı şeride çıkmanız gerekecek.',
-      length: 34000, curvy: 0.6, tight: 0.8, same: 30, oncoming: 22, seed: 777,
+      desc: 'Uzun ve bol çatallı bir yol ağı. Yavaş kamyon ve otobüs kuyrukları var: ya karşı şeride çıkın ya da sakin bir yola sapın.',
+      length: 68000, curvy: 0.6, tight: 0.8, same: 30, oncoming: 22, seed: 777,
+      mapRecipe: { braids: [3, 4], alts: [2, 3], spread: 2400 },
       theme: { grass: '#a8c45c', patch: '#99b553', decor: 'field', density: 0.5 },
       features: [{ type: 'cross', s: 7400 }, { type: 'toll', s: 12400 }, { type: 'dirt', s0: 15000, s1: 17600 }, { type: 'ring', s: 25600 }],
     },
     {
       id: 'col', name: 'Çöl Yolu', tag: 'Hızlı karşı trafik', level: 4,
-      desc: 'Karşıdan gelenler çok hızlı. Virajın ardını görmeden sollamaya kalkmayın.',
-      length: 30000, curvy: 0.9, tight: 0.5, same: 14, oncoming: 22, onSpeed: 1.3, seed: 3131,
+      desc: 'Karşıdan gelenler çok hızlı. Virajın ardını görmeden sollamaya kalkmayın. Kestirmede toprak yol ya da radar çıkabilir.',
+      length: 60000, curvy: 0.9, tight: 0.5, same: 14, oncoming: 22, onSpeed: 1.3, seed: 3131,
+      mapRecipe: { braids: [3, 4], alts: [2, 3], spread: 2400 },
       theme: { grass: '#d8c08c', patch: '#ccb27a', shoulder: '#c2a878', decor: 'cactus', density: 0.4 },
       features: [
         { type: 'radar', s: 5200, kmh: 70 }, { type: 'dirt', s0: 8200, s1: 10400 }, { type: 'cross', s: 13600 },
@@ -70,15 +89,17 @@
     },
     {
       id: 'kar', name: 'Karlı Geçit', tag: 'Buzlu yol', level: 5,
-      desc: 'Yol buzlu: tır virajda daha az döner, fren daha geç tutar. Virajdan önce yavaşlayın.',
-      length: 24000, curvy: 1.0, tight: 0.5, grip: 0.6, same: 12, oncoming: 16, seed: 1212,
+      desc: 'Yollar buzlu: tır virajda daha az döner, fren daha geç tutar. Her çatalda iki yol var, kestirmenin virajları daha sert olabilir.',
+      length: 48000, curvy: 1.0, tight: 0.5, grip: 0.6, same: 12, oncoming: 16, seed: 1212,
+      mapRecipe: { braids: [3, 3], alts: [2, 2], spread: 2000 },
       theme: { grass: '#e9eff3', patch: '#dbe4ea', shoulder: '#c9d2d8', asphalt: '#4d545b', decor: 'snowpine', density: 0.75 },
       features: [{ type: 'tunnel', s0: 7000, s1: 8800 }, { type: 'bridge', s0: 14500, s1: 15600 }],
     },
     {
       id: 'dag', name: 'Dağ Geçidi', tag: 'Keskin virajlar', level: 5,
-      desc: 'Arka arkaya dar virajlar. Bazılarını tam gazla dönemezsiniz, karşı trafik de yoğun.',
-      length: 26000, curvy: 1.2, tight: 0.35, same: 12, oncoming: 20, seed: 4242,
+      desc: 'Arka arkaya dar virajlar. Bazılarını tam gazla dönemezsiniz, karşı trafik de yoğun. Kestirme yolu kısaltır ama daha dar ya da daha kıvrımlı olabilir.',
+      length: 52000, curvy: 1.2, tight: 0.35, same: 12, oncoming: 20, seed: 4242,
+      mapRecipe: { braids: [3, 3], alts: [2, 3], spread: 2000 },
       theme: { grass: '#6f8a43', patch: '#62793b', decor: 'pine', density: 0.8 },
       features: [
         { type: 'tunnel', s0: 5200, s1: 6800 }, { type: 'bridge', s0: 11500, s1: 12400 }, { type: 'tunnel', s0: 17500, s1: 19300 },
@@ -86,54 +107,123 @@
     },
   ];
 
+  function makeWaves(seed, curvy, tight) {
+    const rnd = U.rng(seed);
+    const waves = [];
+    for (let k = 0; k < 4; k++) {
+      waves.push({ amp: curvy * rnd.range(0.14, 0.34), len: rnd.range(1600, 5200) * (tight || 1), ph: rnd.range(0, 6.283) });
+    }
+    return waves;
+  }
+
   class Road {
-    constructor(route) {
+    // One network segment from node seg.a to node seg.b, its features placed by rise.
+    constructor(route, seg) {
       this.route = route;
       this.theme = route.theme;
-      const rnd = U.rng(route.seed);
-      const waves = [];
-      for (let k = 0; k < 4; k++) {
-        waves.push({ amp: route.curvy * rnd.range(0.14, 0.34), len: rnd.range(1600, 5200) * (route.tight || 1), ph: rnd.range(0, 6.283) });
-      }
-      const L = route.length;
-      this.points = (route.features || []).filter((f) => POINTS[f.type]).map((f) => Object.assign({}, f));
+      this.seg = seg;
+      this.isStart = !!seg.isStart;
+      this.atLot = !!seg.atLot;
+      this.toLot = 0;
+      this.fromSeg(seg);
+      const { xs, ys, n } = this;
       this.sides = this.points.filter((j) => POINTS[j.type].side);
       this.rings = this.points.filter((j) => j.type === 'ring');
-      const n = (this.n = Math.floor(L / DS) + 1);
-      const xs = (this.xs = new Float64Array(n));
-      const ys = (this.ys = new Float64Array(n));
-      const hs = (this.hs = new Float64Array(n));
-      const nx = (this.nx = new Float64Array(n));
-      const ny = (this.ny = new Float64Array(n));
-      let x = 0, y = 0;
-      for (let i = 0; i < n; i++) {
-        const s = i * DS;
-        let ramp = U.smooth((s - 1000) / 900) * U.smooth((L - 1500 - s) / 900);
-        for (const j of this.points) {
-          if (POINTS[j.type].flat) ramp *= U.smooth((Math.abs(s - j.s) - POINTS[j.type].flat) / JN.FLAT_RAMP);
-        }
-        let dev = 0;
-        for (const w of waves) dev += w.amp * Math.sin((s / w.len) * 6.283 + w.ph);
-        // tanh keeps the road heading north, so y falls monotonically with s.
-        dev = 1.1 * Math.tanh(dev / 1.1) * ramp;
-        const h = -Math.PI / 2 + dev;
-        xs[i] = x; ys[i] = y; hs[i] = h;
-        nx[i] = -Math.sin(h); ny[i] = Math.cos(h);
-        x += Math.cos(h) * DS;
-        y += Math.sin(h) * DS;
-      }
       this.length = (n - 1) * DS;
       this.endX = xs[n - 1];
       this.endY = ys[n - 1];
+      const bbox = (this.bbox = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+      for (let i = 0; i < n; i++) {
+        bbox.x0 = Math.min(bbox.x0, xs[i]); bbox.x1 = Math.max(bbox.x1, xs[i]);
+        bbox.y0 = Math.min(bbox.y0, ys[i]); bbox.y1 = Math.max(bbox.y1, ys[i]);
+      }
       // Roadside signs other modules add, as {s, text, bg}; drawn on the right of the northbound lanes.
       this.signList = [];
-      this.sections = (route.features || []).filter((f) => SECTIONS[f.type]);
-      for (const sec of this.sections) this.signList.push({ s: sec.s0 - 350, text: SECTIONS[sec.type].sign, bg: '#37474f' });
+      for (const sec of this.sections) this.signList.push({ s: sec.s0 - SIGN_LEAD, text: SECTIONS[sec.type].sign, bg: '#37474f' });
       for (const j of this.points) {
         const c = this.posAt(j.s, 0), kmh = j.kmh || POINTS[j.type].kmh;
         j.x = c.x; j.y = c.y;
-        this.signList.push({ s: j.s - 350, text: POINTS[j.type].sign + (kmh ? ' · ' + kmh + ' km/s' : ''), bg: j.type === 'radar' ? '#c62828' : '#37474f' });
+        this.signList.push({ s: j.s - SIGN_LEAD, text: POINTS[j.type].sign + (kmh ? ' · ' + kmh + ' km/s' : ''), bg: j.type === 'radar' ? '#c62828' : '#37474f' });
       }
+    }
+
+    fromSeg(seg) {
+      const features = seg.features || [];
+      const points = features.filter((f) => POINTS[f.type]).map((f) => Object.assign({}, f));
+      const flats = points.filter((j) => POINTS[j.type].flat).map((j) => ({ rise: j.rise, half: POINTS[j.type].flat }));
+      const t = Road.trace(seg.a, seg.b, { detour: seg.detour, curvy: seg.curvy, tight: seg.tight, wseed: seg.wseed, flats, endFlat: END_FLAT });
+      Object.assign(this, { n: t.n, xs: t.xs, ys: t.ys, hs: t.hs, nx: t.nx, ny: t.ny });
+      this.points = points;
+      for (const j of points) j.s = this.sAtRise(j.rise);
+      this.sections = features.filter((f) => SECTIONS[f.type]).map((f) => Object.assign({}, f, { s0: this.sAtRise(f.rise0), s1: this.sAtRise(f.rise1) }));
+    }
+
+    // The centre line from a to b (b north of a) as a lateral offset over rise: a shift from a.x to b.x,
+    // a detour bump and the wobble waves, all held at zero slope within endFlat of either end and within
+    // each flat window, so the heading is exactly north there. Resampled to n evenly spaced points.
+    static trace(a, b, opts) {
+      const R = a.y - b.y, detour = opts.detour || 0, ef = opts.endFlat || 0, flats = opts.flats || [];
+      const waves = makeWaves(opts.wseed, opts.curvy || 0, opts.tight);
+      const ramp = (r) => {
+        let v = U.smooth((r - ef) / JN.FLAT_RAMP) * U.smooth((R - ef - r) / JN.FLAT_RAMP);
+        for (const f of flats) v *= U.smooth((Math.abs(r - f.rise) - f.half) / JN.FLAT_RAMP);
+        return v;
+      };
+      const wob = (r) => {
+        let v = 0;
+        for (const w of waves) v += w.amp * Math.sin((r / w.len) * 6.283 + w.ph);
+        return v;
+      };
+      // A fine grid over rise: tau is the ramp's running integral scaled to 0..1, so it stands still
+      // wherever the ramp is zero and the base shift and bump, written in tau, add no slope there.
+      const m = Math.max(1, Math.ceil(R / (DS / 4))), dr = R / m;
+      const cumR = new Float64Array(m + 1), cumW = new Float64Array(m + 1), gx = new Float64Array(m + 1), arc = new Float64Array(m + 1);
+      let g0 = ramp(0), w0 = g0 * wob(0);
+      for (let k = 1; k <= m; k++) {
+        const r = k === m ? R : k * dr, g = ramp(r), w = g * wob(r);
+        cumR[k] = cumR[k - 1] + ((g0 + g) * dr) / 2;
+        cumW[k] = cumW[k - 1] + ((w0 + w) * dr) / 2;
+        g0 = g; w0 = w;
+      }
+      const RR = cumR[m], shift = b.x - a.x - cumW[m];
+      const tauAt = (k) => cumR[k] / RR;
+      for (let k = 0; k <= m; k++) {
+        const tau = tauAt(k), sb = Math.sin(Math.PI * tau);
+        gx[k] = a.x + cumW[k] + shift * tau + detour * sb * sb;
+        if (k) arc[k] = arc[k - 1] + Math.hypot(dr, gx[k] - gx[k - 1]);
+      }
+      const L = arc[m], n = Math.round(L / DS) + 1, sp = L / (n - 1);
+      const xs = new Float64Array(n), ys = new Float64Array(n), hs = new Float64Array(n);
+      const nx = new Float64Array(n), ny = new Float64Array(n);
+      let maxDev = 0;
+      for (let i = 0, k = 1; i < n; i++) {
+        let r, x, tau;
+        if (i === 0) { r = 0; x = a.x; tau = 0; }
+        else if (i === n - 1) { r = R; x = b.x; tau = 1; }
+        else {
+          const target = i * sp;
+          while (arc[k] < target) k++;
+          const f = (target - arc[k - 1]) / (arc[k] - arc[k - 1]);
+          r = (k - 1 + f) * dr;
+          x = U.lerp(gx[k - 1], gx[k], f);
+          tau = U.lerp(tauAt(k - 1), tauAt(k), f);
+        }
+        const g = ramp(r);
+        const slope = g * wob(r) + (g / RR) * (shift + detour * Math.PI * Math.sin(2 * Math.PI * tau));
+        const dev = Math.atan(slope), h = -Math.PI / 2 + dev;
+        maxDev = Math.max(maxDev, Math.abs(dev));
+        xs[i] = x; ys[i] = a.y - r; hs[i] = h;
+        nx[i] = -Math.sin(h); ny[i] = Math.cos(h);
+      }
+      return { n, xs, ys, hs, nx, ny, length: (n - 1) * DS, maxDev };
+    }
+
+    // The s at which the centre line stands rise north of its first sample.
+    sAtRise(rise) {
+      const y = this.ys[0] - rise, i = this.indexForY(y);
+      if (i === 0) return 0;
+      const y0 = this.ys[i - 1], y1 = this.ys[i];
+      return (i - 1 + (y0 - y) / (y0 - y1)) * DS;
     }
 
     // How far the lanes swing out from the centre line at s to clear a ring's island.
@@ -204,7 +294,7 @@
 
     // Bridges and tunnels cover the roadside (water, rock), so roadside props skip them.
     coveredAt(s) {
-      return this.sections.some((sec) => sec.type !== 'dirt' && s > sec.s0 - TAPER && s < sec.s1 + TAPER);
+      return this.sections.some((sec) => sec.type !== 'dirt' && sec.type !== 'narrow' && s > sec.s0 - TAPER && s < sec.s1 + TAPER);
     }
 
     indexForY(y) {
@@ -268,7 +358,7 @@
       const i0 = Math.max(0, this.indexForY(view.y1 + 500) - 2);
       const i1 = Math.min(this.n - 1, this.indexForY(view.y0 - 500) + 2);
       const list = [];
-      if (i0 === 0) list.push(-1600, -800);
+      if (i0 === 0 && this.isStart) list.push(-1600, -800);
       for (let i = i0; i <= i1; i++) list.push(i * DS);
       return { list, i0, i1 };
     }
@@ -327,70 +417,88 @@
       if (dash) ctx.setLineDash([]);
     }
 
-    draw(ctx, view) {
+    // The samples of list whose point at offset d lies more than w from the centre line of every other
+    // segment (with lower, of every lower-id one) that shares a node with this one, as separate runs.
+    clip(list, d, map, w, lower) {
+      const out = [[]];
+      for (const s of list) {
+        const p = this.posAt(s, typeof d === 'function' ? d(s) : d);
+        if (map.covered(this.seg.id, p.x, p.y, w, lower)) {
+          if (out[out.length - 1].length) out.push([]);
+        } else out[out.length - 1].push(s);
+      }
+      return out.filter((l) => l.length > 1);
+    }
+
+    drawLayer(ctx, view, layer, map) {
       const { list, i0, i1 } = this.sampleList(view);
       if (list.length < 2) return;
       const th = this.theme, asphalt = th.asphalt || '#44474c';
-      if (th.sea) this.drawSea(ctx, list, view);
       const runs = this.runs(list);
       const sides = this.sides.filter((j) => j.y > view.y0 - 300 && j.y < view.y1 + 300);
       const rail = (k, extra) => (s) => k * (this.railAt(s) + this.bulgeAt(s) + extra);
       const off = (d) => (s) => d + Math.sign(d) * this.bulgeAt(s);
-      for (const r of runs) {
-        if (r.type === 'bridge') this.drawUnderBridge(ctx, r.list);
-        if (r.type === 'tunnel') this.band(ctx, r.list, -RAIL - 260, RAIL + 260, ROCK);
-      }
-      // A side road's shoulder goes under the main road and its asphalt over it, so the two meet flush.
-      for (const j of sides) this.sideBand(ctx, j, JN.SIDE_RAIL + 8, th.shoulder || '#a89a7c');
-      for (const r of runs) {
-        const ground = r.type === 'bridge' ? DECK : r.type === 'tunnel' ? '#55595e' : th.shoulder || '#a89a7c';
-        this.band(ctx, r.list, rail(-1, 8), rail(1, 8), ground);
-        this.band(ctx, r.list, off(-HALF - 6), off(HALF + 6), r.type === 'dirt' ? DIRT : asphalt);
-      }
-      for (const j of sides) this.sideBand(ctx, j, JN.SIDE_HW, asphalt);
-      for (const r of runs) {
-        if (r.type === 'dirt') {
-          this.line(ctx, r.list, -LANE, 'rgba(90,62,35,0.35)', 10);
-          this.line(ctx, r.list, LANE, 'rgba(90,62,35,0.35)', 10);
-          continue;
+      const lines = (lists, d, color, width, dash, mark) => {
+        for (const l of lists) for (const c of this.clip(l, d, map, mark ? MARK_CLEAR : HALF, mark)) this.line(ctx, c, d, color, width, dash);
+      };
+      if (layer === 'under') {
+        if (th.sea && map.segs[this.seg.id].coast) this.drawSea(ctx, list, view);
+        for (const r of runs) {
+          if (r.type === 'bridge') this.drawUnderBridge(ctx, r.list);
+          if (r.type === 'tunnel') this.band(ctx, r.list, -RAIL - 260, RAIL + 260, ROCK);
         }
-        for (const l of this.cut(r.list, JN.SIDE_HW)) {
-          this.line(ctx, l, off(-HALF + 2), '#f2f2f2', 3);
-          this.line(ctx, l, off(HALF - 2), '#f2f2f2', 3);
+      } else if (layer === 'ground') {
+        // A side road's shoulder goes under the main road and its asphalt over it, so the two meet flush.
+        for (const j of sides) this.sideBand(ctx, j, JN.SIDE_RAIL + 8, th.shoulder || '#a89a7c');
+        for (const r of runs) {
+          const ground = r.type === 'bridge' ? DECK : r.type === 'tunnel' ? '#55595e' : th.shoulder || '#a89a7c';
+          this.band(ctx, r.list, rail(-1, 8), rail(1, 8), ground);
         }
-        for (const l of this.cut(r.list, JN.SIDE_HW, 'cross')) {
-          this.line(ctx, l, off(-LANE), '#e8e8e8', 2.5, [26, 34]);
-          this.line(ctx, l, off(LANE), '#e8e8e8', 2.5, [26, 34]);
-          this.line(ctx, l, off(-2.5), '#f0c419', 2.5, [40, 20]);
-          this.line(ctx, l, off(2.5), '#f0c419', 2.5, [40, 20]);
+      } else if (layer === 'asphalt') {
+        for (const r of runs) this.band(ctx, r.list, off(-HALF - 6), off(HALF + 6), r.type === 'dirt' ? DIRT : asphalt);
+        for (const j of sides) this.sideBand(ctx, j, JN.SIDE_HW, asphalt);
+      } else if (layer === 'marks') {
+        for (const r of runs) {
+          if (r.type === 'dirt') {
+            this.line(ctx, r.list, -LANE, 'rgba(90,62,35,0.35)', 10);
+            this.line(ctx, r.list, LANE, 'rgba(90,62,35,0.35)', 10);
+            continue;
+          }
+          const all = this.cut(r.list, JN.SIDE_HW), cross = this.cut(r.list, JN.SIDE_HW, 'cross');
+          lines(all, off(-HALF + 2), '#f2f2f2', 3, null, true);
+          lines(all, off(HALF - 2), '#f2f2f2', 3, null, true);
+          lines(cross, off(-LANE), '#e8e8e8', 2.5, [26, 34], true);
+          lines(cross, off(LANE), '#e8e8e8', 2.5, [26, 34], true);
+          lines(cross, off(-2.5), '#f0c419', 2.5, [40, 20], true);
+          lines(cross, off(2.5), '#f0c419', 2.5, [40, 20], true);
         }
-      }
-      for (const j of sides) this.drawJunction(ctx, j);
-      for (const r of runs) {
-        if (r.type === 'tunnel') {
-          this.line(ctx, r.list, rail(-1, 4), '#2f3237', 10);
-          this.line(ctx, r.list, rail(1, 4), '#2f3237', 10);
-          this.drawPortal(ctx, r.sec.s0);
-          this.drawPortal(ctx, r.sec.s1);
-        } else {
-          const bridge = r.type === 'bridge';
-          for (const l of this.cut(r.list, JN.SIDE_RAIL)) {
-            this.line(ctx, l, rail(-1, 0), bridge ? '#cfd8dc' : '#9aa3ab', bridge ? 6 : 4);
-            this.line(ctx, l, rail(1, 0), bridge ? '#cfd8dc' : '#9aa3ab', bridge ? 6 : 4);
+        for (const j of sides) this.drawJunction(ctx, j);
+      } else if (layer === 'rails') {
+        for (const r of runs) {
+          if (r.type === 'tunnel') {
+            this.line(ctx, r.list, rail(-1, 4), '#2f3237', 10);
+            this.line(ctx, r.list, rail(1, 4), '#2f3237', 10);
+            this.drawPortal(ctx, r.sec.s0);
+            this.drawPortal(ctx, r.sec.s1);
+          } else {
+            const bridge = r.type === 'bridge', cut = this.cut(r.list, JN.SIDE_RAIL);
+            lines(cut, rail(-1, 0), bridge ? '#cfd8dc' : '#9aa3ab', bridge ? 6 : 4);
+            lines(cut, rail(1, 0), bridge ? '#cfd8dc' : '#9aa3ab', bridge ? 6 : 4);
           }
         }
-      }
-      for (const j of sides) {
-        for (const k of [-1, 1]) {
-          const x0 = j.x + k * (RAIL + this.bulgeAt(j.s + JN.SIDE_RAIL)), x1 = j.x + k * JN.SIDE_LEN;
-          for (const y of [j.y - JN.SIDE_RAIL, j.y + JN.SIDE_RAIL]) this.segment(ctx, x0, y, x1, y, '#9aa3ab', 4);
+        for (const j of sides) {
+          for (const k of [-1, 1]) {
+            const x0 = j.x + k * (RAIL + this.bulgeAt(j.s + JN.SIDE_RAIL)), x1 = j.x + k * JN.SIDE_LEN;
+            for (const y of [j.y - JN.SIDE_RAIL, j.y + JN.SIDE_RAIL]) this.segment(ctx, x0, y, x1, y, '#9aa3ab', 4);
+          }
         }
+        this.drawPosts(ctx, i0, i1, map);
+      } else if (layer === 'props') {
+        for (const j of this.points) if (j.y > view.y0 - 300 && j.y < view.y1 + 300) this.drawPoint(ctx, j);
+        if (this.isStart) this.drawStart(ctx);
+        this.drawSigns(ctx, i0, i1, map);
+        this.drawDecor(ctx, i0, i1, map);
       }
-      this.drawPosts(ctx, i0, i1);
-      for (const j of this.points) if (j.y > view.y0 - 300 && j.y < view.y1 + 300) this.drawPoint(ctx, j);
-      this.drawStart(ctx);
-      this.drawSigns(ctx, i0, i1);
-      this.drawDecor(ctx, i0, i1);
     }
 
     drawSea(ctx, list, view) {
@@ -526,7 +634,7 @@
       this.band(ctx, list, w, w + 70, '#8c8f93');
     }
 
-    drawPosts(ctx, i0, i1) {
+    drawPosts(ctx, i0, i1, map) {
       ctx.fillStyle = '#6b737a';
       for (let i = i0 - (i0 % 6); i <= i1; i += 6) {
         const s = i * DS;
@@ -536,6 +644,7 @@
         for (const side of [-1, 1]) {
           const x = this.xs[i] + this.nx[i] * r * side;
           const y = this.ys[i] + this.ny[i] * r * side;
+          if (map.onRoad(x, y, POST_GAP, this.seg.id)) continue;
           ctx.fillRect(x - 3, y - 3, 6, 6);
         }
       }
@@ -584,45 +693,50 @@
       return Math.abs(s - Math.round(s / PARK_SIGN) * PARK_SIGN) >= gap && this.signList.every((g) => Math.abs(g.s - s) >= gap);
     }
 
-    drawSigns(ctx, i0, i1) {
-      const step = PARK_SIGN / DS;
-      const startK = Math.max(1, Math.floor(i0 / step));
-      for (let k = startK; k * step <= i1 + step; k++) {
-        const s = k * PARK_SIGN;
-        if (s > this.length - 600) break;
-        const p = this.posAt(s, RAIL + 70);
-        const km = ((this.length - s) / 10000).toFixed(1).replace('.', ',');
-        this.sign(ctx, p.x, p.y, 'PARK ALANI ↑ ' + km + ' km', '#2e7d32');
+    // A sign at s with its box (half sizes hw, hh) east of the rail; src is the signList entry it shows.
+    signSpot(s, text, bg, src) {
+      const hw = (SIGN_GLYPH * text.length + 20) / 2, p = this.posAt(s, RAIL + SIGN_GAP + hw);
+      return { s, x: p.x, y: p.y, hw, hh: SIGN_HH, text, bg, src: src || null };
+    }
+
+    // Every sign of this road: signList first, then the lot sign and the distance signs.
+    signSpots() {
+      const out = this.signList.map((g) => this.signSpot(g.s, g.text, g.bg, g));
+      if (this.atLot) out.push(this.signSpot(this.length - 500, 'TIR PARKI ↑', '#1565c0'));
+      for (let s = PARK_SIGN; s <= this.length - 600; s += PARK_SIGN) {
+        out.push(this.signSpot(s, 'PARK ALANI ↑ ' + ((this.length - s + this.toLot) / 10000).toFixed(1).replace('.', ',') + ' km', '#2e7d32'));
       }
-      const e = this.posAt(this.length - 500, RAIL + 90);
-      this.sign(ctx, e.x, e.y, 'TIR PARKI ↑', '#1565c0');
-      for (const g of this.signList) {
+      return out;
+    }
+
+    drawSigns(ctx, i0, i1, map) {
+      for (const g of map.signs(this.seg.id)) {
         const i = g.s / DS;
-        if (i < i0 - 60 || i > i1 + 60) continue;
-        const p = this.posAt(g.s, RAIL + 60);
-        this.sign(ctx, p.x, p.y, g.text, g.bg);
+        if (i >= i0 - 60 && i <= i1 + 60) this.sign(ctx, g.x, g.y, g.text, g.bg);
       }
     }
 
-    drawDecor(ctx, i0, i1) {
-      const th = this.theme, seed = this.route.seed;
+    drawDecor(ctx, i0, i1, map) {
+      const th = this.theme, seed = this.route.seed, salt = (this.seg.id + 1) * 7919;
+      const beach = th.sea && map.segs[this.seg.id].coast;
       const step = 9;
       for (let k = Math.floor(i0 / step); k * step <= i1; k++) {
         for (let m = 0; m < 2; m++) {
-          const key = k * 2 + m;
+          const key = k * 2 + m + salt;
           if (U.hash(key * 1.37 + seed) > th.density) continue;
           const i = k * step;
           if (this.coveredAt(i * DS) || this.points.some((j) => Math.abs(i * DS - j.s) < POINTS[j.type].clear)) continue;
           let side = U.hash(key * 2.11 + seed) < 0.5 ? -1 : 1;
           let dd = side * (RAIL + 45 + U.hash(key * 3.7 + seed) * 460);
-          if (th.sea && side < 0) {
+          if (beach && side < 0) {
             if (U.hash(key * 5.3) > 0.4) continue;
             dd = -(360 + U.hash(key * 4.1) * 80);
           }
           const x = this.xs[i] + this.nx[i] * dd;
           const y = this.ys[i] + this.ny[i] * dd;
           const r = 14 + U.hash(key * 9.1 + seed) * 16;
-          drawProp(ctx, x, y, r, th.sea && side < 0 ? 'palm' : th.decor, key);
+          if (map.onRoad(x, y, r, this.seg.id)) continue;
+          drawProp(ctx, x, y, r, beach && side < 0 ? 'palm' : th.decor, key);
         }
       }
     }
@@ -708,5 +822,6 @@
     }
   }
 
+  Road.LAYERS = ['under', 'ground', 'asphalt', 'marks', 'rails', 'props'];
   TR.Road = Road;
 })();

@@ -31,7 +31,7 @@
 
   const now = () => performance.now();
   const me = () => (O.role === 'guest' ? GUEST : HOST);
-  const inRound = () => G().road && ROUND_STATES.includes(G().state);
+  const inRound = () => G().map && ROUND_STATES.includes(G().state);
 
   // ---------- what a host records for its guest ----------
   let recording = false;
@@ -67,12 +67,19 @@
   };
   const carRow = (key, c) => [key, c.x, c.y, c.h, c.len, c.wid, c.kind, c.color, c.brake ? 1 : 0, c.flash, c.wreck ? c.wreck.t : -1];
 
+  // Cars, side cars, junction states, sheep and cones go as one group per map segment, in G.map.segs order.
   O.snapshot = () => {
-    const g = G(), ev = g.events, jn = g.junctions;
-    const cars = [];
-    g.traffic.cars.forEach((c, i) => c.dormant <= 0 && cars.push(carRow(i, c)));
-    const cones = [];
-    ev.works.forEach((w, wi) => w.cones.forEach((c, ci) => c.fly && cones.push([wi, ci, c.x, c.y, c.h])));
+    const g = G(), segs = g.map.segs;
+    const cars = segs.map(({ traffic }) => {
+      const rows = [];
+      traffic.cars.forEach((c, i) => c.dormant <= 0 && rows.push(carRow(i, c)));
+      return rows;
+    });
+    const cones = segs.map(({ events }) => {
+      const rows = [];
+      events.works.forEach((w, wi) => w.cones.forEach((c, ci) => c.fly && rows.push([wi, ci, c.x, c.y, c.h])));
+      return rows;
+    });
     return {
       t: 'snap', ts: now(),
       g: { state: g.state, time: g.time, countdown: g.countdown, overT: g.overT, lastChance: g.lastChance, winner: idxOf(g.winner), firstLot: idxOf(g.firstLot) },
@@ -81,27 +88,26 @@
         unloader: p.unloader ? own(p.unloader, UNLOADER_REF) : null,
       })),
       cars,
-      jcars: jn.cars.map((c) => carRow(c.id, c)),
-      jt: jn.time,
-      js: jn.states.map((st) => [st.flash, st.gates ? st.gates.map((q) => [q.open, q.broken ? 1 : 0]) : 0]),
-      et: ev.time,
-      sheep: ev.flocks.map((f) => f.sheep.map((q) => [q.x, q.y, q.h, q.moving ? 1 : 0])),
+      jcars: segs.map(({ junctions }) => junctions.cars.map((c) => carRow(c.id, c))),
+      jt: segs[g.map.start].junctions.time,
+      js: segs.map(({ junctions }) => junctions.states.map((st) => [st.flash, st.gates ? st.gates.map((q) => [q.open, q.broken ? 1 : 0]) : 0])),
+      et: segs[g.map.start].events.time,
+      sheep: segs.map(({ events }) => events.flocks.map((f) => f.sheep.map((q) => [q.x, q.y, q.h, q.moving ? 1 : 0]))),
       cones,
       audio: audioQ.splice(0),
       fx: fxQ.splice(0),
     };
   };
 
-  // Where the events' flocks, roadworks and their signs went. A guest builds its own road and events from the
-  // same seed, but in another browser a float can land the other side of a test, so it takes the host's.
-  O.layout = () => {
-    const ev = G().events;
-    return {
-      signs: G().road.signList,
-      flocks: ev.flocks.map((f) => Object.assign({}, f, { pass: [] })),
-      works: ev.works,
-    };
-  };
+  // Where each segment's flocks, roadworks and their signs went. A guest builds its own roads and events from
+  // the same spec, but in another browser a float can land the other side of a test, so it takes the host's.
+  O.layout = () => ({
+    segs: G().map.segs.map(({ road, events }) => ({
+      signs: road.signList,
+      flocks: events.flocks.map((f) => Object.assign({}, f, { pass: [] })),
+      works: events.works,
+    })),
+  });
 
   const lerp = (a, b, k) => a + (b - a) * k;
   const lerpA = (a, b, k) => a + U.wrap(b - a) * k;
@@ -114,7 +120,7 @@
   // Shows snapshot cur, moved k of the way back from prev towards it for anything that moves smoothly.
   O.applySnap = (cur, prev, k) => {
     const g = G();
-    if (!g.road || !g.players.length) return;
+    if (!g.map || !g.players.length) return;
     const pk = prev ? k : 1;
     Object.assign(g, { state: cur.g.state, countdown: cur.g.countdown, overT: cur.g.overT, lastChance: cur.g.lastChance });
     g.time = prev ? lerp(prev.g.time, cur.g.time, pk) : cur.g.time;
@@ -135,29 +141,32 @@
     });
     g.winner = cur.g.winner >= 0 ? g.players[cur.g.winner] : null;
     g.firstLot = cur.g.firstLot >= 0 ? g.players[cur.g.firstLot] : null;
-    const pc = prev && byKey(prev.cars), pj = prev && byKey(prev.jcars);
-    g.traffic.cars = cur.cars.map((r) => carObj(r, pc && pc.get(r[0]), pk));
-    g.junctions.cars = cur.jcars.map((r) => carObj(r, pj && pj.get(r[0]), pk));
-    g.junctions.time = prev ? lerp(prev.jt, cur.jt, pk) : cur.jt;
-    g.junctions.states.forEach((st, i) => {
-      const r = cur.js[i];
-      if (!r) return;
-      st.flash = r[0];
-      if (st.gates && r[1]) st.gates.forEach((q, gi) => { q.open = r[1][gi][0]; q.broken = !!r[1][gi][1]; });
+    const jt = prev ? lerp(prev.jt, cur.jt, pk) : cur.jt, et = prev ? lerp(prev.et, cur.et, pk) : cur.et;
+    g.map.segs.forEach(({ traffic, junctions, events }, k) => {
+      const pc = prev && byKey(prev.cars[k]), pj = prev && byKey(prev.jcars[k]);
+      traffic.cars = cur.cars[k].map((r) => carObj(r, pc && pc.get(r[0]), pk));
+      junctions.cars = cur.jcars[k].map((r) => carObj(r, pj && pj.get(r[0]), pk));
+      junctions.time = jt;
+      junctions.states.forEach((st, i) => {
+        const r = cur.js[k][i];
+        if (!r) return;
+        st.flash = r[0];
+        if (st.gates && r[1]) st.gates.forEach((q, gi) => { q.open = r[1][gi][0]; q.broken = !!r[1][gi][1]; });
+      });
+      events.time = et;
+      const sheep = cur.sheep[k], was = prev && prev.sheep[k];
+      events.flocks.forEach((f, fi) => f.sheep.forEach((q, si) => {
+        const r = sheep[fi] && sheep[fi][si];
+        if (!r) return;
+        const a = was && was[fi] && was[fi][si];
+        q.x = a ? lerp(a[0], r[0], pk) : r[0]; q.y = a ? lerp(a[1], r[1], pk) : r[1]; q.h = a ? lerpA(a[2], r[2], pk) : r[2];
+        q.moving = !!r[3];
+      }));
+      for (const [wi, ci, x, y, h] of cur.cones[k]) {
+        const c = events.works[wi] && events.works[wi].cones[ci];
+        if (c) Object.assign(c, { x, y, h, fly: c.fly || {} });
+      }
     });
-    const ev = g.events;
-    ev.time = prev ? lerp(prev.et, cur.et, pk) : cur.et;
-    ev.flocks.forEach((f, fi) => f.sheep.forEach((q, si) => {
-      const r = cur.sheep[fi] && cur.sheep[fi][si];
-      if (!r) return;
-      const a = prev && prev.sheep[fi] && prev.sheep[fi][si];
-      q.x = a ? lerp(a[0], r[0], pk) : r[0]; q.y = a ? lerp(a[1], r[1], pk) : r[1]; q.h = a ? lerpA(a[2], r[2], pk) : r[2];
-      q.moving = !!r[3];
-    }));
-    for (const [wi, ci, x, y, h] of cur.cones) {
-      const c = ev.works[wi] && ev.works[wi].cones[ci];
-      if (c) Object.assign(c, { x, y, h, fly: c.fly || {} });
-    }
   };
 
   // Plays a snapshot's sounds and particles once, when the guest first shows it.
@@ -350,7 +359,7 @@
       relinked();
       // A guest back from a dropped link rebuilds the round and screen it missed. The snapshot comes after
       // the round, which clears the winner, and before a result screen, which reads it.
-      if (G().road && G().state !== 'menu') {
+      if (G().map && G().state !== 'menu') {
         send({ t: 'round', o: G().roundOpts, series: G().series, layout: O.layout() });
         send(O.snapshot());
       }
@@ -379,10 +388,12 @@
     if (m.t === 'round') {
       G().series = m.series;
       G().startRound(m.o.ri, m.o);
-      const ev = G().events;
-      G().road.signList = m.layout.signs;
-      ev.flocks = m.layout.flocks;
-      ev.works = m.layout.works;
+      G().map.segs.forEach(({ road, events }, k) => {
+        const l = m.layout.segs[k];
+        road.signList = l.signs;
+        events.flocks = l.flocks;
+        events.works = l.works;
+      });
       O.snaps = [];
       return ui('hideAll');
     }

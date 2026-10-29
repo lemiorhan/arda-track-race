@@ -15,8 +15,9 @@
   };
   // Roadworks close one direction's outer lane over LEN (a range). Cones stand STEP apart along a line
   // that tapers in from the road edge over TAPER at both ends, with a row across the lane every ROW. Cars
-  // in that lane move over from MERGE before the taper, or wait GAP short of it.
-  const WORK = { LEN: [500, 800], TAPER: 160, STEP: 34, ROW: 260, MERGE: 450, GAP: 20 };
+  // in that lane move over from MERGE before the taper, or wait GAP short of it. The flagman stands FLAG
+  // ahead of the taper.
+  const WORK = { LEN: [500, 800], TAPER: 160, STEP: 34, ROW: 260, MERGE: 450, GAP: 20, FLAG: 40 };
   // A knocked cone flies off with the truck's velocity plus KICK away from it and slides to rest at SLIDE.
   const CONE = { R: 7, KICK: 120, SLIDE: 2.4 };
   // Cars brake for a flock or a closure at DECEL.
@@ -27,9 +28,14 @@
   const WARN = '#e65100';
 
   // A round's roadside events: a flock of sheep that crosses the road as racers come, and roadworks that
-  // close a lane. Both are placed from the round's seed, so the two players meet the same ones.
+  // close a lane. Both are placed from the round's seed, so the two players meet the same ones. opts says
+  // which of the two this road gets: false, true for a seeded spot, or the s the map placed it at (a flock's
+  // middle, the start of the closure), whose stretch is SPAN before and after it, sign included. It also
+  // moves the seeded window's ends: from in place of FROM, endGap when it is longer than END_GAP.
   class Events {
-    constructor(road, seed) {
+    constructor(road, seed, opts) {
+      const o = Object.assign({ flock: true, work: true, from: PLACE.FROM, endGap: PLACE.END_GAP }, opts);
+      o.endGap = Math.max(PLACE.END_GAP, o.endGap);
       this.road = road;
       this.rnd = U.rng(seed);
       this.time = 0;
@@ -39,9 +45,14 @@
         .concat(road.points.map((j) => [j.s - (TR.POINTS[j.type].flat || 0), j.s + (TR.POINTS[j.type].flat || 0)]));
       const taken = [];
       // A spot for an event reaching before and after its anchor s, with its sign ahead of that.
-      const spot = (before, after, text) => {
+      const spot = (want, before, after, text) => {
+        if (typeof want === 'number') {
+          taken.push([want - before - PLACE.SIGN, want + after]);
+          road.signList.push({ s: want - before - PLACE.SIGN, text, bg: WARN });
+          return want;
+        }
         for (let k = 0; k < PLACE.TRIES; k++) {
-          const s = this.rnd.range(PLACE.FROM + before + PLACE.SIGN, road.length - PLACE.END_GAP - after);
+          const s = this.rnd.range(o.from + before + PLACE.SIGN, road.length - o.endGap - after);
           const a = s - before - PLACE.SIGN, b = s + after;
           if (busy.some(([b0, b1]) => a < b1 + PLACE.CLEAR && b > b0 - PLACE.CLEAR)) continue;
           if (taken.some(([t0, t1]) => a < t1 + PLACE.APART && b > t0 - PLACE.APART)) continue;
@@ -52,11 +63,15 @@
         }
         return null;
       };
-      const fs = spot(FLOCK.SPREAD, FLOCK.SPREAD, '⚠ KOYUN SÜRÜSÜ');
-      if (fs != null) this.flocks.push(this.makeFlock(fs));
-      const len = this.rnd.range(WORK.LEN[0], WORK.LEN[1]);
-      const ws = spot(WORK.TAPER, len + WORK.TAPER, '⚠ YOL ÇALIŞMASI');
-      if (ws != null) this.works.push(this.makeWork(ws, len, this.rnd() < 0.5 ? 1 : -1));
+      if (o.flock) {
+        const fs = spot(o.flock, FLOCK.SPREAD, FLOCK.SPREAD, '⚠ KOYUN SÜRÜSÜ');
+        if (fs != null) this.flocks.push(this.makeFlock(fs));
+      }
+      if (o.work) {
+        const len = this.rnd.range(WORK.LEN[0], WORK.LEN[1]);
+        const ws = spot(o.work, WORK.TAPER + WORK.FLAG, len + WORK.TAPER + WORK.FLAG, '⚠ YOL ÇALIŞMASI');
+        if (ws != null) this.works.push(this.makeWork(ws, len, this.rnd() < 0.5 ? 1 : -1));
+      }
     }
 
     makeFlock(s) {
@@ -87,7 +102,7 @@
       for (let s = s0 + WORK.ROW / 2; s < s1; s += WORK.ROW) {
         for (const k of [0.35, 0.7]) this.addCone(w, s, U.lerp(line, edge, k));
       }
-      w.flag = road.posAt(w.entry - dir * 40, dir * (RAIL + 18));
+      w.flag = road.posAt(w.entry - dir * WORK.FLAG, dir * (RAIL + 18));
       return w;
     }
 
@@ -280,6 +295,10 @@
     }
   }
   Events.DECEL = DECEL;
+  Events.SPAN = {
+    flock: [FLOCK.SPREAD + PLACE.SIGN, FLOCK.SPREAD],
+    work: [WORK.TAPER + WORK.FLAG + PLACE.SIGN, WORK.LEN[1] + WORK.TAPER + WORK.FLAG],
+  };
 
   function drawCone(ctx, c) {
     ctx.save();

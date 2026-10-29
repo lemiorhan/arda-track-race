@@ -13,7 +13,7 @@
   <div id="title" class="overlay">
     <div class="card hero">
       <div class="logo">TIR YARIŞI</div>
-      <p class="sub">İki tır, tek yol. Yarış, geri geri park et, kutuları doğru diz.</p>
+      <p class="sub">İki tır, bir yol ağı. Yolunu seç, yarış, geri geri park et, kutuları doğru diz.</p>
       <div class="menu-buttons">
         <button data-go="setup" class="primary big">Yeni Maç</button>
         <button data-go="online" class="big">Online Maç</button>
@@ -90,7 +90,7 @@
         <span class="vs">toplam puan</span>
         <span class="tot p2" id="standP2"></span>
       </div>
-      <h2>Rotayı seçin · her oyuncu kendi seçimini yapar</h2>
+      <h2>Haritayı seçin · her oyuncu kendi seçimini yapar, yollar her tur yeniden çizilir</h2>
       <div id="routeCards" class="routes"></div>
       <p id="pickNote" class="note"></p>
       <div class="players">
@@ -119,15 +119,16 @@
       <h1>Nasıl Oynanır?</h1>
       <p class="sub">Her tur üç aşamadan oluşur. Kutuları ilk doğru dizen turu kazanır.</p>
       <div class="phases">
-        <div class="phase"><b>1 · Yarış</b><p>Yolda yavaş araçlar ve karşıdan gelen trafik var. Sollamak için gerekirse karşı şeride geçin ama kafa kafaya çarpmayın. Kaza tırı birkaç saniye durdurur. Yoldan çıkınca tır yavaşlar. Her rotanın kendi zorluğu var: Çöl Yolu'nda karşı trafik hızlı, Karlı Geçit'te yol buzlu, Dağ Geçidi'nde bazı virajlar tam gazla dönülmez.</p></div>
+        <div class="phase"><b>1 · Yarış</b><p>Yolda yavaş araçlar ve karşıdan gelen trafik var. Sollamak için gerekirse karşı şeride geçin ama kafa kafaya çarpmayın. Kaza tırı birkaç saniye durdurur. Yoldan çıkınca tır yavaşlar. Her haritanın kendi zorluğu var: Çöl Yolu'nda karşı trafik hızlı, Karlı Geçit'te yol buzlu, Dağ Geçidi'nde bazı virajlar tam gazla dönülmez.</p></div>
         <div class="phase"><b>2 · Park</b><p>Park alanında kendi renginizdeki bölmeye dorseyi <b>geri geri</b> yanaştırın. Dorse düz olmalı, tamamen bölmenin içinde kalmalı ve rampaya dayanmalı. Geri giderken direksiyonu az kırın. Dorse çok kırılırsa makas atar, o zaman biraz ileri gidip düzeltin. Paneldeki <b>Makas açısı</b> çubuğu kırmızıya yaklaşıyorsa direksiyonu geri alın. Sürüş yardımı açıksa geri giderken dorsenin gideceği yol mavi çizgiyle görünür, makas atacaksa çizgi kırmızı olur.</p></div>
         <div class="phase"><b>3 · Boşaltma</b><p>İşçiyle dorsenin kapısından kutuları alıp hedef alana taşıyın. Ekrandaki <b>Hedef Dizilim</b> paneli kutuların hangi yığında, hangi sırayla duracağını gösterir: bazen yan yana, bazen üst üste. Dorseden önce kapıya en yakın kutu çıkar. Gereken kutu içerideyse öndekileri yere bırakın ya da kapıdan dorseye geri koyun.</p></div>
       </div>
       <div class="phases">
+        <div class="phase"><b>Yol ağı ve harita</b><p>Yol çatallanır, kollar ileride yeniden birleşir. Hangi koldan gideceğinizi direksiyonla seçersiniz. Köşedeki harita çatala yaklaşınca büyür, renkler trafiği gösterir: turuncu kalabalık, beyaz normal, yeşil sakin yol. Kestirme daha kısadır ama bir bedeli vardır: toprak yol, dar ya da daha kıvrımlı yol, koyun sürüsü, radar ya da gişe. Tur sırasında bir yolda trafik sıkışabilir, sıkışan yer haritada kırmızı görünür. Harita size yol seçmez, karar sizin.</p></div>
         <div class="phase"><b>Köprü, toprak yol, tünel</b><p>Köprüde bariyerler asfalta yaklaşır, kenarda payınız yoktur. Toprak yolda tır kayar, geç durur ve az döner. Tünel karanlıktır: önünüzü farlarınız ve tavan lambaları aydınlatır. Yol kenarındaki tabela kesimden önce uyarır.</p></div>
         <div class="phase"><b>Kavşak ve döner kavşak</b><p>Dört yol ağzında trafik ışığına uyun: kırmızıda geçmek ceza yazar, yan yoldan gelen araç da size çarpabilir. Döner kavşakta şeritler adanın etrafından dolaşır. Ada sert bir engeldir. Uzun dorse içe kaçar, iç şeritte adaya sürtünür: yavaşlayıp dış şeritten dönün.</p></div>
         <div class="phase"><b>Radar ve gişe</b><p>Radar tabelasındaki hızın üstünde direğin önünden geçerseniz ceza yazılır. Gişeye tabeladaki hızın altında yaklaşırsanız kol kalkar. Hızlı gelirseniz kolu kırarsınız: tır bir an sersemler ve temas cezası yazılır.</p></div>
-        <div class="phase"><b>Koyun sürüsü ve yol çalışması</b><p>Yerleri her tur değişir, iki oyuncu da aynılarıyla karşılaşır. Koyun tabelasını görünce yavaşlayın: siz yaklaşınca sürü yolu geçer. Sürüye değerseniz tır sert yavaşlar ve bir an sersemler, ceza yazılmaz. Yol çalışmasında bir şerit dubalarla kapalıdır. Dubaya çarpmak temas cezası yazar.</p></div>
+        <div class="phase"><b>Koyun sürüsü ve yol çalışması</b><p>Yerleri her tur değişir, iki oyuncu da aynılarıyla karşılaşır. Koyunlar kestirmelerde çıkar, yol çalışması kestirme dışındaki bir yoldadır. Koyun tabelasını görünce yavaşlayın: siz yaklaşınca sürü yolu geçer. Sürüye değerseniz tır sert yavaşlar ve bir an sersemler, ceza yazılmaz. Yol çalışmasında bir şerit dubalarla kapalıdır. Dubaya çarpmak temas cezası yazar.</p></div>
         <div class="phase"><b>Rüzgâr tüneli</b><p>Yarışta rakip tırın hemen arkasında, aynı şeritte kalırsanız tırınız rüzgârsız kalır ve en yüksek hızınız yavaş yavaş artar. Şeritten çıkınca etki birkaç saniyede söner.</p></div>
         <div class="phase"><b>Son şans</b><p>Rakip turu bitirdiğinde siz park alanındaysanız kısa bir süre daha oynarsınız. Bu sürede yerleştirdiğiniz kutular puan getirir. Turu kazanan değişmez.</p></div>
         <div class="phase"><b>Kıl payı ve korna</b><p>Hızlıyken karşıdan gelen bir araca çarpmadan çok yakın geçerseniz kıl payı puanı alırsınız. Önünüzdeki yavaş araca korna çalın: yan şerit boşsa kenara çekilir.</p></div>
@@ -151,7 +152,7 @@
       </table>
       <h2>Puanlama</h2>
       <table class="keys"><tbody id="ruleBody"></tbody></table>
-      <p class="note">Par süreler: <span id="parList"></span>. Tur puanı 0'ın altına düşmez. Maç sonunda toplam puanı yüksek olan şampiyon olur.</p>
+      <p class="note">Par süreler yaklaşıktır, her tur o haritanın en kısa yoluna göre hesaplanır: <span id="parList"></span>. Tur puanı 0'ın altına düşmez. Maç sonunda toplam puanı yüksek olan şampiyon olur.</p>
       <div class="actions"><button data-back class="primary">Geri (Esc)</button></div>
     </div>
   </div>
@@ -261,6 +262,7 @@
   <script src="js/store.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/road.js"></script>
+  <script src="js/map.js"></script>
   <script src="js/truck.js"></script>
   <script src="js/assist.js"></script>
   <script src="js/fx.js"></script>

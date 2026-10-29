@@ -1,6 +1,6 @@
 'use strict';
 (function () {
-  const TR = window.TR, U = TR.U, T = TR.TRUCK, R = TR.ROAD, RULES = TR.SCORE_RULES;
+  const TR = window.TR, U = TR.U, T = TR.TRUCK, R = TR.ROAD, MAP = TR.MAP, RULES = TR.SCORE_RULES;
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const COLORS = ['#1e88e5', '#e53935'];
@@ -13,9 +13,11 @@
   const DRAFT = { DIST: 380, LANE: 30, BOOST: 0.12, RISE: 1.2, FALL: 2.5, MIN_V: 120 };
   // The horn moves the first same-direction car within RANGE ahead; it works again after CD seconds.
   const HORN = { RANGE: 420, CD: 2.5 };
+  // Segment k's events, traffic and junctions draw from the round's streams moved by SEG_SALT × k.
+  const SEG_SALT = 104729;
 
   const G = (TR.Game = {
-    state: 'menu', route: null, road: null, lot: null, traffic: null, plan: null,
+    state: 'menu', route: null, map: null, lot: null, plan: null,
     players: [], time: 0, countdown: 0, winner: null, overT: 0, firstLot: null,
     routeIdx: 0, series: null, preview: null, previewIdx: 0, previewT: 0,
   });
@@ -44,7 +46,7 @@
 
   G.isLastRound = () => G.series.history.length >= G.series.rounds;
 
-  // An online guest passes the host's opts, so both machines build the same round.
+  // An online guest passes the host's opts, map spec included, so both machines build the same round.
   G.startRound = (ri, opts) => {
     const sr = G.series;
     sr.round = sr.history.length + 1;
@@ -52,25 +54,47 @@
     const s = TR.Settings.get();
     const o = (G.roundOpts = Object.assign({ ri, seed: ((Date.now() & 0xffffff) ^ route.seed) >>> 0, traffic: s.traffic, weather: s.weather }, opts));
     const seed = o.seed;
+    if (!o.mapSpec) o.mapSpec = TR.MapGen.generate(route, seed);
     G.routeIdx = ri;
     G.route = route;
-    G.road = new TR.Road(route);
-    TR.Assist.prepare(G.road);
-    G.lot = new TR.Lot(G.road.endX, G.road.endY);
-    G.events = new TR.Events(G.road, seed * 23 + 7);
-    G.traffic = new TR.Traffic(G.road, route, seed, DENSITY[o.traffic] || 1, G.events);
-    G.junctions = new TR.Junctions(G.road, G.traffic, seed * 19 + 11);
+    G.map = new TR.RoadMap(o.mapSpec, route);
+    // The driver's branch is not known in advance, so a segment's exit is the lowest entry limit of them all.
+    for (const k of G.map.order.slice().reverse()) {
+      const sg = G.map.segs[k];
+      let exit = null;
+      for (const b of sg.out) {
+        const road = G.map.segs[b].road, limit = road.assist.limit[0];
+        if (!exit || limit < exit.limit) exit = Object.assign({ limit }, TR.Assist.bindAt(road, 0));
+      }
+      TR.Assist.prepare(sg.road, exit);
+    }
+    G.map.segs.forEach((sg, k) => {
+      const road = sg.road, salt = SEG_SALT * k;
+      const [c0, c1] = G.map.clearSpan(k), ev = sg.spec.events, at = (e) => (e && typeof e === 'object' ? road.sAtRise(e.rise) : e);
+      const place = Object.assign({ endGap: road.length - c1, flock: at(ev.flock), work: at(ev.work) }, road.isStart ? {} : { from: c0 });
+      sg.events = new TR.Events(road, seed * 23 + 7 + salt, place);
+      sg.traffic = new TR.Traffic(road, route, seed + salt, (DENSITY[o.traffic] || 1) * sg.spec.flow, sg.events);
+      sg.junctions = new TR.Junctions(road, sg.traffic, seed * 19 + 11 + salt);
+      sg.traffic.jams = o.mapSpec.jams.filter((j) => j.seg === k).map((j) => Object.assign({}, j, { s0: road.sAtRise(j.rise0), s1: road.sAtRise(j.rise1) }));
+    });
+    const linked = (ids) => ids.map((k) => ({ traffic: G.map.segs[k].traffic, k: G.map.segs[k].spec.flow }));
+    for (const sg of G.map.segs) {
+      const L = sg.links;
+      sg.traffic.links = { next: linked(L.next), prev: linked(L.prev), endSibs: linked(L.endSibs), startSibs: linked(L.startSibs) };
+    }
+    const lotRoad = G.map.segs[G.map.lotSeg].road;
+    G.lot = new TR.Lot(lotRoad.endX, lotRoad.endY);
     G.plan = TR.makeCargoPlan(U.rng(seed * 7 + 3));
     G.contract = U.rng(seed * 13 + 5).pick(TR.CONTRACTS);
     G.weather = o.weather === 'karisik' ? U.rng(seed * 17 + 9).pick(['gunduz', 'gece', 'sis']) : 'gunduz';
     G.players = COLORS.map((color, i) => {
       const lane = i === 0 ? R.LANE / 2 : R.LANE * 1.5;
-      const q = G.road.posAt(R.START_S, lane);
+      const q = G.map.segs[G.map.start].road.posAt(R.START_S, lane);
       const truck = new TR.Truck(i, color, q.x, q.y, q.h);
       truck.grip = route.grip || 1;
       return {
         idx: i, name: sr.names[i], color, truck, assist: sr.assist[i],
-        phase: 'race', s: R.START_S, d: lane, hint: -1, offroad: false,
+        phase: 'race', seg: G.map.start, s: R.START_S, d: lane, hint: -1, offroad: false,
         inp: null, autoT: 0, draft: 0, hornCd: 0, nearMisses: 0, redLights: 0, speeding: 0, flashT: 0, redAhead: Infinity,
         crashes: 0, bumps: 0, resets: 0, bumpCd: 0, railCd: 0, skidD: 0,
         stats: { firstToLot: false, parkPts: null },
@@ -166,11 +190,14 @@
     TR.FX.update(dt);
     // Traffic appears out of sight of every screen, the online guest's too.
     const views = viewports().concat(TR.Online.remoteViewports()).map((vp) => viewOf(G.players[vp.idx], vp));
-    for (const e of G.junctions.update(dt, G.players, G.time)) junctionEvent(e);
-    for (const e of G.events.update(dt, G.players, G.traffic)) roadEvent(e);
-    G.traffic.update(dt, G.players, views, () => TR.Audio.horn(), G.junctions);
-    for (const h of G.traffic.collide(G.players).concat(G.junctions.collide(G.players))) crash(h.player, h.headOn, h.car);
-    for (const p of G.traffic.nearMisses(G.players)) nearMiss(p);
+    G.map.segs.forEach((sg, k) => {
+      const on = G.players.filter((p) => p.seg === k);
+      for (const e of sg.junctions.update(dt, on, G.time)) junctionEvent(e);
+      for (const e of sg.events.update(dt, on, sg.traffic)) roadEvent(e);
+      sg.traffic.update(dt, G.map.racersNear(k, G.players), views, () => TR.Audio.horn(), sg.junctions, G.time);
+      for (const h of sg.traffic.collide(G.players).concat(sg.junctions.collide(G.players))) crash(h.player, h.headOn, h.car);
+      for (const p of sg.traffic.nearMisses(on)) nearMiss(p);
+    });
     updateCams(dt);
     if (G.state === 'finishing') {
       G.overT -= dt;
@@ -192,26 +219,24 @@
     p.railCd -= dt;
     if (p.phase === 'race' || p.phase === 'park') {
       if (inp.reset) recover(p);
-      const loc = G.road.locate(p.truck.x, p.truck.y, p.hint);
-      p.hint = loc.i;
-      p.s = loc.s;
-      p.d = G.road.laneD(loc.s, loc.d);
+      const rows = follow(p);
+      const sg = G.map.segs[p.seg], road = sg.road;
       if (inp.horn && p.hornCd <= 0) {
         p.hornCd = HORN.CD;
         TR.Audio.truckHorn();
-        G.traffic.yieldTo(p, G.players, HORN.RANGE);
+        sg.traffic.yieldTo(p, G.players.filter((q) => q.seg === p.seg), HORN.RANGE);
       }
-      p.offroad = p.phase === 'race' && Math.abs(p.d) > R.HALF + 4 && loc.s < G.road.length && !G.junctions.onSide(p.truck.x, p.truck.y);
-      p.redAhead = p.phase === 'race' ? G.junctions.stopAhead(p) : Infinity;
+      p.offroad = p.phase === 'race' && rows.every((c) => offroadOn(G.map.segs[c.seg], c, p.truck));
+      p.redAhead = p.phase === 'race' ? sg.junctions.stopAhead(p) : Infinity;
       updateDraft(p, dt);
       const cap = p.phase === 'park' ? T.LOT_CAP : p.offroad ? T.OFFROAD_CAP : T.MAX_FWD * (1 + DRAFT.BOOST * p.draft);
       if (p.phase === 'race' && p.assist === 'tam' && !inp.brake) {
-        const auto = TR.Assist.autoBrake(G.road, p, inp, p.redAhead);
+        const auto = TR.Assist.autoBrake(road, p, inp, p.redAhead);
         if (auto.thr < 0 && inp.thr >= 0) p.autoT = 0.5;
         inp = auto;
       }
       const jacked = p.truck.jack > 0;
-      p.truck.grip = (G.route.grip || 1) * (p.phase === 'race' ? G.road.gripAt(p.s) : 1);
+      p.truck.grip = (G.route.grip || 1) * (p.phase === 'race' ? road.gripAt(p.s) : 1);
       p.truck.update(dt, inp, cap);
       if (!jacked && p.truck.jack > 0) TR.Audio.jack();
     } else if (p.phase === 'unload') {
@@ -222,12 +247,39 @@
     }
   }
 
+  // Near a node the truck is located on every segment that meets there, and steering picks the branch
+  // (RoadMap.pickSegment). Each row's d is a lane offset.
+  function follow(p) {
+    const t = p.truck;
+    const rows = G.map.candidates(p.seg, p.s).map((k) => {
+      const road = G.map.segs[k].road, loc = road.locate(t.x, t.y, k === p.seg ? p.hint : -1);
+      return { seg: k, s: loc.s, d: road.laneD(loc.s, loc.d), len: road.length, open: road.atLot, i: loc.i };
+    });
+    p.seg = TR.RoadMap.pickSegment(rows, p.seg, MAP.PICK_HYST);
+    const r = rows.find((c) => c.seg === p.seg);
+    p.hint = r.i;
+    p.s = r.s;
+    p.d = r.d;
+    return rows;
+  }
+
+  // Between a segment's two ends; before the start and past the lot the road runs on.
+  const along = (road, s) => (s >= -MAP.PICK_TOL || road.isStart) && (s <= road.length + MAP.PICK_TOL || road.atLot);
+
+  // Past the lot segment's end the truck is on its way to a bay, not off the road.
+  function offroadOn(sg, c, t) {
+    const road = sg.road;
+    if (road.atLot && c.s >= road.length) return false;
+    if (along(road, c.s) && Math.abs(c.d) <= R.HALF + 4) return false;
+    return !sg.junctions.onSide(t.x, t.y);
+  }
+
   // The other truck's s is its rear axle; its trailer ends LT + TR_REAR behind that, and this truck's
-  // nose sits CAB_FRONT ahead of its own.
+  // nose sits CAB_FRONT ahead of its own. s compares only on one segment.
   function updateDraft(p, dt) {
     const o = G.players[1 - p.idx];
     const gap = o.s - p.s - (T.LT + T.TR_REAR + T.CAB_FRONT);
-    const inZone = p.phase === 'race' && o.phase === 'race' && !p.offroad && p.truck.v > DRAFT.MIN_V &&
+    const inZone = p.phase === 'race' && o.phase === 'race' && o.seg === p.seg && !p.offroad && p.truck.v > DRAFT.MIN_V &&
       gap > 0 && gap < DRAFT.DIST && Math.abs(o.d - p.d) < DRAFT.LANE;
     p.draft = inZone ? Math.min(1, p.draft + dt / DRAFT.RISE) : Math.max(0, p.draft - dt / DRAFT.FALL);
   }
@@ -260,8 +312,25 @@
     }
   }
 
+  // The push back inside the barrier of the candidate segment the point overshoots least; null inside any
+  // of them. Past the lot segment's end the lot's walls take over.
+  function railPush(p, cands, x, y) {
+    let best = null, own = null;
+    for (const k of cands) {
+      const road = G.map.segs[k].road, loc = road.locate(x, y, k === p.seg ? p.hint : -1);
+      if (road.atLot && loc.s >= road.length - 2) return null;
+      const sn = Math.sign(loc.d);
+      const push = { over: Math.abs(loc.d) - road.railAt(loc.s), nx: -road.nx[loc.i] * sn, ny: -road.ny[loc.i] * sn };
+      if (k === p.seg) own = push;
+      if (!along(road, loc.s)) continue;
+      if (push.over <= 0) return null;
+      if (!best || push.over < best.over) best = push;
+    }
+    return best || own;
+  }
+
   function rails(p, dt) {
-    const t = p.truck, road = G.road;
+    const t = p.truck, sg = G.map.segs[p.seg], cands = G.map.candidates(p.seg, p.s);
     // All corners come from one snapshot of the truck, so only the deepest may push:
     // adding up every corner's overshoot would move the truck several times too far.
     // A junction sets its own bounds (side roads, a ring's island); elsewhere the barrier runs along the road.
@@ -269,13 +338,8 @@
     for (const b of t.boxes()) {
       for (const c of U.corners(b)) {
         if (G.lot.contains(c.x, c.y)) continue;
-        let push = G.junctions.limit(c.x, c.y);
-        if (push === undefined) {
-          const loc = road.locate(c.x, c.y, p.hint);
-          if (loc.s >= road.length - 2) continue;
-          const sg = Math.sign(loc.d);
-          push = { over: Math.abs(loc.d) - road.railAt(loc.s), nx: -road.nx[loc.i] * sg, ny: -road.ny[loc.i] * sg };
-        }
+        let push = sg.junctions.limit(c.x, c.y);
+        if (push === undefined) push = railPush(p, cands, c.x, c.y);
         if (push && push.over > 0 && (!worst || push.over > worst.over)) worst = push;
       }
     }
@@ -358,9 +422,10 @@
     const fast = Math.abs(t.v) > 40;
     const pc = Math.cos(t.phi), ps = Math.sin(t.phi), hw = T.TR_HW * 0.8;
     const wheels = [-1, 1].map((k) => ({ x: t.x - pc * T.LT + ps * k * hw, y: t.y - ps * T.LT - pc * k * hw }));
-    const dirt = p.phase === 'race' && G.road.dirtAt(p.s);
+    const road = G.map.segs[p.seg].road;
+    const dirt = p.phase === 'race' && road.dirtAt(p.s);
     if ((p.offroad || dirt) && fast && Math.random() < 30 * dt) {
-      const dust = G.road.theme.shoulder || '#a58f6a';
+      const dust = road.theme.shoulder || '#a58f6a';
       for (const w of wheels) TR.FX.emit('dust', w.x, w.y, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, dust);
     }
     if ((G.route.grip || 1) < 1 && t.braking && fast) {
@@ -421,9 +486,10 @@
   function recover(p) {
     p.resets++;
     if (p.phase === 'race') {
-      const s = Math.max(R.START_S, p.s);
+      const road = G.map.segs[p.seg].road;
+      const s = Math.min(road.length, Math.max(road.isStart ? R.START_S : MAP.NODE_CLEAR, p.s));
       const lane = Math.abs(p.d - R.LANE / 2) < Math.abs(p.d - R.LANE * 1.5) ? R.LANE / 2 : R.LANE * 1.5;
-      const q = G.road.lanePos(s, lane);
+      const q = road.lanePos(s, lane);
       p.truck.place(q.x, q.y, q.h);
       p.truck.stun = 1.5;
       p.hint = -1;
@@ -475,7 +541,7 @@
       const bay = G.lot.bays[q.idx], r = q.truck.trailerRear();
       return 2e6 - Math.hypot(r.x - bay.cx, r.y - bay.y0);
     }
-    return 1e6 + q.s;
+    return 1e6 - G.map.distToLot(q.seg, q.s);
   }
   G.rankOf = (p) => {
     const o = G.players[1 - p.idx];
@@ -617,19 +683,22 @@
     ctx.beginPath();
     ctx.rect(vp.x, vp.y, vp.w, vp.h);
     ctx.clip();
-    ctx.fillStyle = G.road.theme.grass;
+    ctx.fillStyle = G.route.theme.grass;
     ctx.fillRect(vp.x, vp.y, vp.w, vp.h);
     const sh = TR.Settings.get().shake ? p.shake * 12 : 0;
     ctx.translate(vp.x + vp.w / 2 + (Math.random() - 0.5) * sh, vp.y + vp.h / 2 + (Math.random() - 0.5) * sh);
     ctx.scale(view.z, view.z);
     ctx.translate(-p.cam.x, -p.cam.y);
-    drawGrass(view, G.road.theme);
-    G.road.draw(ctx, view);
+    drawGrass(view, G.route.theme);
+    G.map.draw(ctx, view);
     G.lot.draw(ctx, view, G.players);
     for (const q of G.players) if (q.unloader) q.unloader.drawZone(ctx);
-    G.events.draw(ctx, view);
-    G.traffic.draw(ctx, view);
-    G.junctions.draw(ctx, view);
+    for (const k of G.map.visible(view)) {
+      const sg = G.map.segs[k];
+      sg.events.draw(ctx, view);
+      sg.traffic.draw(ctx, view);
+      sg.junctions.draw(ctx, view);
+    }
     TR.FX.draw(ctx, view, false);
     if (p.phase === 'park') {
       drawParkGuide(p);
@@ -647,25 +716,39 @@
     if (solo) TR.HUD.drawRival(ctx, vp, p, G);
   }
 
+  // The menu camera takes the branch that runs furthest west at its middle at every fork. MapGen puts each
+  // braid's busy branch on a seeded side, so the role that runs furthest west changes from fork to fork and
+  // the preview hints at no route.
+  function previewPath(map) {
+    const path = [map.start], west = (k) => map.segs[k].road.xs[map.segs[k].road.n >> 1];
+    for (let sg = map.segs[map.start]; sg.out.length; sg = map.segs[path[path.length - 1]]) {
+      path.push(sg.out.reduce((b, k) => (west(k) < west(b) ? k : b)));
+    }
+    return path;
+  }
+
   function renderPreview(dt) {
-    if (!G.preview || G.preview.route !== TR.ROUTES[G.previewIdx]) {
-      G.preview = new TR.Road(TR.ROUTES[G.previewIdx]);
+    const route = TR.ROUTES[G.previewIdx];
+    if (!G.preview || G.preview.route !== route) {
+      G.preview = new TR.RoadMap(TR.MapGen.generate(route, route.seed), route);
       G.previewT = 0;
     }
-    const road = G.preview;
+    const map = G.preview, path = previewPath(map);
+    const total = path.reduce((a, k) => a + map.segs[k].road.length, 0);
     G.previewT += dt;
-    const s = 1200 + ((G.previewT * 160) % (road.length - 3000));
-    const c = road.posAt(s, 0);
+    let s = 1200 + ((G.previewT * 160) % (total - 3000)), k = 0;
+    while (s > map.segs[path[k]].road.length && k < path.length - 1) s -= map.segs[path[k++]].road.length;
+    const c = map.segs[path[k]].road.posAt(s, 0);
     const z = 0.7 * Math.max(0.6, H / 820);
     const view = { z, x0: c.x - W / 2 / z, x1: c.x + W / 2 / z, y0: c.y - H / 2 / z, y1: c.y + H / 2 / z };
     ctx.save();
-    ctx.fillStyle = road.theme.grass;
+    ctx.fillStyle = route.theme.grass;
     ctx.fillRect(0, 0, W, H);
     ctx.translate(W / 2, H / 2);
     ctx.scale(z, z);
     ctx.translate(-c.x, -c.y);
-    drawGrass(view, road.theme);
-    road.draw(ctx, view);
+    drawGrass(view, route.theme);
+    map.draw(ctx, view);
     ctx.restore();
   }
 
@@ -673,7 +756,7 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.fillStyle = '#0d0f12';
     ctx.fillRect(0, 0, W, H);
-    if (G.state === 'menu' || !G.road) {
+    if (G.state === 'menu' || !G.map) {
       renderPreview(dt);
       return;
     }
@@ -707,7 +790,7 @@
   // and particles.
   function guestUpdate(dt) {
     TR.Online.apply();
-    if (!G.road || !['countdown', 'play', 'finishing'].includes(G.state)) return;
+    if (!G.map || !['countdown', 'play', 'finishing'].includes(G.state)) return;
     updateCams(dt);
     TR.FX.update(dt);
   }
