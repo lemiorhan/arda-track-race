@@ -22,6 +22,7 @@
       this.steer = 0;
       this.stun = 0;
       this.jack = 0;
+      this.flash = 0;
       this.braking = false;
       this.wheelRot = 0;
       this.grip = 1;
@@ -36,6 +37,7 @@
         hard = false;
       }
       if (this.jack > 0) this.jack -= dt;
+      if (this.flash > 0) this.flash -= dt;
       const back = st === 0 || Math.sign(st) !== Math.sign(this.steer);
       this.steer = U.approach(this.steer, st, (back ? 4.5 : 2.6) * dt);
 
@@ -189,6 +191,16 @@
       ctx.fillStyle = '#ffe9a6';
       ctx.fillRect(T.CAB_FRONT - 2, -T.CAB_HW + 2, 2, 6);
       ctx.fillRect(T.CAB_FRONT - 2, T.CAB_HW - 8, 2, 6);
+      if (this.flash > 0 && Math.floor(this.flash * 8) % 2 === 0) {
+        ctx.fillStyle = 'rgba(255,244,200,0.6)';
+        ctx.beginPath();
+        ctx.moveTo(T.CAB_FRONT, -T.CAB_HW);
+        ctx.lineTo(T.CAB_FRONT + 90, -T.CAB_HW - 28);
+        ctx.lineTo(T.CAB_FRONT + 90, T.CAB_HW + 28);
+        ctx.lineTo(T.CAB_FRONT, T.CAB_HW);
+        ctx.closePath();
+        ctx.fill();
+      }
       ctx.restore();
     }
 

@@ -122,6 +122,19 @@ for (const ri of [0, 2, 4]) {
   });
 }
 
+test('a guest sees the host truck\'s headlights blink with its horn', () => {
+  const m = match(0), { host } = m;
+  m.race();
+  tap(host, 'KeyE');
+  let lit = 0;
+  for (let f = 0; f < 90; f++) {
+    m.step();
+    sameFrame(m, f);
+    if (m.guest.log.some((l) => l.includes('255,244,200'))) lit++;
+  }
+  assert.ok(lit > 10, 'the guest saw the headlights on for ' + lit + ' frames');
+});
+
 // Every route's junctions, radars and tolls, met at speed: side traffic, flashes and broken gates.
 test('a guest draws the same frames as its host at every roadside point', () => {
   const seen = { cross: 0, radar: 0, toll: 0, ring: 0 }, met = { cross: 0, radar: 0, toll: 0, ring: 0 };

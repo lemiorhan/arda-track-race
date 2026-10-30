@@ -271,6 +271,59 @@ test('a car honked at in the middle of a lane change keeps on with it', () => {
   }
 });
 
+const BEAM = '255,244,200';
+
+test('the headlights blink with the horn, and only then', () => {
+  const w = world([], true), R = w.TR.ROAD, [a, b] = w.TR.Game.players;
+  put(w, a, SHORTCUT, 5000, R.LANE / 2);
+  put(w, b, BUSY, 5000, R.LANE / 2);
+  hold(w, b, {});
+  const lit = () => {
+    w.log.length = 0;
+    w.step();
+    return w.log.some((l) => l.includes(BEAM));
+  };
+  hold(w, a, {});
+  for (let f = 0; f < 60; f++) assert.equal(lit(), false, 'frame ' + f + ': lit before the horn');
+  // Only frames drawn while the flash still runs: the one where it runs out is dark anyway.
+  const seen = [];
+  hold(w, a, { horn: true });
+  for (let f = 0; f < 600; f++) {
+    const on = lit();
+    hold(w, a, {});
+    if (a.truck.flash <= 0) break;
+    seen.push(on);
+  }
+  assert.ok(seen.length < 600, 'the flash never ended');
+  assert.ok(seen.length > 60, 'the flash lasted ' + seen.length + ' frames');
+  assert.ok(seen.filter(Boolean).length > 10, 'the headlights were on for ' + seen.filter(Boolean).length + ' frames');
+  assert.ok(seen.some((x) => !x), 'the headlights did not blink');
+  for (let f = 0; f < 60; f++) assert.equal(lit(), false, 'frame ' + f + ': lit after the flash');
+});
+
+test('a horn just before the park ends leaves no headlights on through the unload', () => {
+  const w = world([], true), TR = w.TR, G = TR.Game, T = TR.TRUCK, [a, b] = G.players;
+  park(w, b);
+  hold(w, b, {});
+  hold(w, a, {});
+  const bay = G.lot.bays[0];
+  a.truck.place(bay.cx, bay.y0 + T.LT + T.TR_REAR + 2, Math.PI / 2);
+  runUntil(w, 600, () => a.phase === 'park');
+  assert.equal(a.phase, 'park');
+  // Late enough in the park hold that the flash is still lit when the unload starts.
+  for (let f = 0; f < 8; f++) w.step();
+  hold(w, a, { horn: true });
+  w.step();
+  hold(w, a, {});
+  runUntil(w, 600, () => a.phase === 'unload');
+  assert.equal(a.phase, 'unload');
+  for (let f = 0; f < 120; f++) {
+    w.log.length = 0;
+    w.step();
+    assert.ok(!w.log.some((l) => l.includes(BEAM)), 'frame ' + f + ' of the unload: the headlights are on');
+  }
+});
+
 test('the red light ahead comes from the truck\'s own segment', () => {
   const w = world([{ type: 'cross', rise: 5000 }]), TR = w.TR, G = TR.Game, R = TR.ROAD, T = TR.TRUCK, [a, b] = G.players;
   const cross = G.map.segs[SHORTCUT].road.points[0];

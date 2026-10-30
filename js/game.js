@@ -16,8 +16,9 @@
   // hit the truck meanwhile (Traffic.collide).
   const TURBO = { AT: [0.15, 0.7], LEN: [5, 10], BOOST: 0.45 };
   // The horn moves the first same-direction car within RANGE ahead over as soon as the other lane has room,
-  // while the truck stays within RANGE behind it on its segment; it works again after CD seconds.
-  const HORN = { RANGE: 420, CD: 2.5 };
+  // while the truck stays within RANGE behind it on its segment; it works again after CD seconds. The
+  // headlights blink for FLASH seconds with it.
+  const HORN = { RANGE: 420, CD: 2.5, FLASH: 1.4 };
   // Segment k's events, traffic and junctions draw from the round's streams moved by SEG_SALT × k.
   const SEG_SALT = 104729;
 
@@ -235,6 +236,7 @@
       if (inp.horn && p.hornCd <= 0) {
         p.hornCd = HORN.CD;
         TR.Audio.truckHorn();
+        p.truck.flash = HORN.FLASH;
         sg.traffic.yieldTo(p, G.players.filter((q) => q.seg === p.seg), HORN.RANGE);
       }
       p.offroad = p.phase === 'race' && rows.every((c) => offroadOn(G.map.segs[c.seg], c, p.truck));
@@ -537,6 +539,8 @@
     p.stats.parkPts = TR.parkPrecision(p.park);
     p.truck.v = 0;
     p.truck.braking = false;
+    // Truck.update, which runs the flash out, stops with the park.
+    p.truck.flash = 0;
     p.unloader = new TR.Unloader(p.idx, G.lot, G.plan, p.color);
     TR.Audio.park();
     toast(p, 'PARK TAMAM! +' + p.stats.parkPts, '#69f0ae', 2);
