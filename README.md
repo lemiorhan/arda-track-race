@@ -8,7 +8,7 @@ Trucks on Road, iki kişilik bir tır yarışı oyunudur. Aynı klavyede yan yan
 
 ## Hemen oyna
 
-👉 **https://lemiorhan.github.io/truck-race/**
+👉 **https://lemiorhan.github.io/trucks-on-road-online-game**
 
 Bilgisayarda Chrome, Edge, Firefox ya da Safari ile açın. Oyun klavyeyle oynanır, telefon ve tablette çalışmaz.
 
