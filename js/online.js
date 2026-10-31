@@ -35,7 +35,7 @@
 
   // ---------- what a host records for its guest ----------
   let recording = false;
-  const audioQ = [], fxQ = [];
+  const audioQ = [], fxQ = [], frameQ = [];
   const audio = {};
   for (const name of Object.keys(TR.Audio)) {
     if (AUDIO_LOCAL.includes(name)) continue;
@@ -52,6 +52,10 @@
     if (rot == null) rot = Math.random() * 6.283;
     if (recording && !O.lost) fxQ.push([kind, x, y, vx, vy, color, rot]);
     emit(kind, x, y, vx, vy, color, rot);
+  };
+  // Every frame the host simulates goes to the guest's referee.
+  O.record = (dt, steps) => {
+    if (recording && !O.lost) frameQ.push(TR.Referee.row(G().time, dt, G().players, steps));
   };
 
   // ---------- snapshots ----------
@@ -222,8 +226,10 @@
   // ---------- link ----------
   let lastHeard = 0, lastPing = 0, lastSnap = 0, lastVps = '', retryAt = 0, joinBy = 0;
   // The screen a guest coming back should be on; null while a round runs with nothing over it.
-  let lastScreen = null;
+  let lastScreen = null, helloSent = false;
   const send = (m) => O.link && O.link.send(enc(m));
+  // Frames go only into a snapshot that is sent: one taken for anything else would swallow them.
+  const sendSnap = () => send(Object.assign(O.snapshot(), { frames: frameQ.splice(0) }));
 
   function ui(name, ...args) {
     const f = TR.UI && TR.UI[name];
@@ -255,6 +261,7 @@
         lastHeard = now();
         if (role === 'guest') {
           const s = TR.Settings.get();
+          helloSent = true;
           send({ t: 'hello', name: s.onlineName, assist: s.onlineAssist, rejoin: !!O.lost });
         }
       },
@@ -353,15 +360,16 @@
       O.peer = { name: String(m.name || '').trim().slice(0, 14) || 'Kırmızı Tır', assist };
       O.vps = [];
       remote.sync = true;
-      send({ t: 'welcome', name: TR.Settings.get().onlineName });
+      send({ t: 'welcome', name: TR.Settings.get().onlineName, fp: TR.Referee.fingerprint() });
       O.status = 'Oda ' + O.code + ' · rakip: ' + O.peer.name;
       if (first) return ui('onlineGuestJoined', O.peer);
       relinked();
       // A guest back from a dropped link rebuilds the round and screen it missed. The snapshot comes after
-      // the round, which clears the winner, and before a result screen, which reads it.
+      // the round, which clears the winner, and before a result screen, which reads it. The guest's referee
+      // starts over from that snapshot.
       if (G().map && G().state !== 'menu') {
         send({ t: 'round', o: G().roundOpts, series: G().series, layout: O.layout() });
-        send(O.snapshot());
+        sendSnap();
       }
       if (lastScreen) send(lastScreen);
     } else if (m.t === 'in') {
@@ -379,15 +387,22 @@
     else if (m.t === 'pick' && Number.isInteger(m.i) && m.i >= 0 && m.i < TR.ROUTES.length) ui('remotePick', m.i);
   }
 
+  const refereeOff = () => (TR.Referee.off ? ' ' + TR.Referee.off : '');
   function guestReceive(m) {
+    // A host answers a hello with the round still on, if any, so a round right after the welcome is one this
+    // guest comes back into, not one that starts.
+    const back = helloSent && m.t === 'round';
+    if (m.t !== 'welcome') helloSent = false;
     if (m.t === 'welcome') {
       O.peer = { name: m.name };
+      TR.Referee.peer(m.fp);
       if (O.lost) return relinked();
-      return setStatus('Bağlandı. ' + m.name + ' maç ayarlarını yapıyor…');
+      return setStatus('Bağlandı. ' + m.name + ' maç ayarlarını yapıyor…' + refereeOff());
     }
     if (m.t === 'round') {
       G().series = m.series;
       G().startRound(m.o.ri, m.o);
+      TR.Referee.reset(G().players, G().route, m.series, back);
       G().map.segs.forEach(({ road, events }, k) => {
         const l = m.layout.segs[k];
         road.signList = l.signs;
@@ -398,6 +413,7 @@
       return ui('hideAll');
     }
     if (m.t === 'snap') {
+      TR.Referee.check(m);
       O.offset = Math.min(O.offset, now() - m.ts);
       O.snaps.push(m);
       if (O.snaps.length > BUFFER) O.snaps.shift();
@@ -410,7 +426,7 @@
     else if (m.t === 'roundResult') ui('mirrorRoundResult', m.scores, m.titles);
     else if (m.t === 'matchResult') ui('mirrorMatchResult');
     else if (m.t === 'wait') {
-      setStatus(m.text);
+      setStatus(m.text + refereeOff());
       ui('mirrorWait');
     }
   }
@@ -424,10 +440,11 @@
       recording = true;
       audioQ.length = 0;
       fxQ.length = 0;
+      frameQ.length = 0;
       lastScreen = null;
       return send({ t: 'round', o: data, series: G().series, layout: O.layout() });
     }
-    if (inRound() || type === 'roundResult') send(O.snapshot());
+    if (inRound() || type === 'roundResult') sendSnap();
     const m = Object.assign({ t: type, series: G().series }, data);
     lastScreen = type === 'resume' ? null : m;
     if (type === 'roundResult' || type === 'matchResult') recording = false;
@@ -479,7 +496,7 @@
       }
     } else if (O.peer && G().state !== 'paused' && inRound() && t - lastSnap >= 1000 / SNAP_HZ) {
       lastSnap = t;
-      send(O.snapshot());
+      sendSnap();
     }
   };
 })();

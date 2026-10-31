@@ -186,9 +186,19 @@
     ON.applyLatest();
     const fresh = firstSight(G.series.id + ':' + G.series.history.length);
     UI.showRoundResult(scores, fresh ? G.recordRound(scores) : scores.map(() => -1), titles);
+    refereeLine('rrReferee', false);
   };
 
-  UI.mirrorMatchResult = () => showMatchResult(!firstSight(G.series.id + ':match'));
+  UI.mirrorMatchResult = () => {
+    showMatchResult(!firstSight(G.series.id + ':match'));
+    refereeLine('mrReferee', true);
+  };
+
+  function refereeLine(id, whole) {
+    const text = TR.Referee.line(G.series.names, whole);
+    $(id).textContent = text;
+    $(id).classList.toggle('hidden', !text);
+  }
 
   // ---------- route select ----------
   // A card's par is the theme's nominal span; the round's own map may run up to MAP.LEN_TOL longer.

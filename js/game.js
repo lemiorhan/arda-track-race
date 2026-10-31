@@ -21,11 +21,14 @@
   const HORN = { RANGE: 420, CD: 2.5, FLASH: 1.4 };
   // Segment k's events, traffic and junctions draw from the round's streams moved by SEG_SALT × k.
   const SEG_SALT = 104729;
+  const MAX_DT = 0.05;
 
+  // DRAFT, TURBO and MAX_DT are read by the online referee, which checks a host's frames against them.
   const G = (TR.Game = {
     state: 'menu', route: null, map: null, lot: null, plan: null,
     players: [], time: 0, countdown: 0, winner: null, overT: 0, firstLot: null,
     routeIdx: 0, series: null, preview: null, previewIdx: 0, previewT: 0,
+    DRAFT, TURBO, MAX_DT,
   });
 
   let W = 0, H = 0, DPR = 1;
@@ -175,6 +178,9 @@
   }
 
   // ---------- simulation ----------
+  // Per player, what its truck's update ran on this frame: [reset, thr, steer, brake, cap], or null.
+  const steps = [null, null];
+
   function update(dt) {
     if (G.state === 'countdown') {
       G.countdown -= dt;
@@ -210,6 +216,8 @@
       for (const h of sg.traffic.collide(G.players).concat(sg.junctions.collide(G.players))) crash(h.player, h.headOn, h.car);
       for (const p of sg.traffic.nearMisses(on)) nearMiss(p);
     });
+    // Before endRound, whose snapshot must carry this frame.
+    TR.Online.record(dt, steps);
     updateCams(dt);
     if (G.state === 'finishing') {
       G.overT -= dt;
@@ -229,8 +237,10 @@
     if (p.shake > 0) p.shake = Math.max(0, p.shake - dt * 2.5);
     p.bumpCd -= dt;
     p.railCd -= dt;
+    steps[p.idx] = null;
     if (p.phase === 'race' || p.phase === 'park') {
-      if (inp.reset) recover(p);
+      const reset = !!inp.reset;
+      if (reset) recover(p);
       const rows = follow(p);
       const sg = G.map.segs[p.seg], road = sg.road;
       if (inp.horn && p.hornCd <= 0) {
@@ -251,8 +261,9 @@
         inp = auto;
       }
       const jacked = p.truck.jack > 0;
-      p.truck.grip = (G.route.grip || 1) * (p.phase === 'race' ? road.gripAt(p.s) : 1);
+      p.truck.grip = gripOf(p);
       p.truck.update(dt, inp, cap);
+      steps[p.idx] = [reset ? 1 : 0, inp.thr, inp.steer, inp.brake ? 1 : 0, cap];
       if (!jacked && p.truck.jack > 0) TR.Audio.jack();
     } else if (p.phase === 'unload') {
       p.unloader.update(dt, inp);
@@ -277,6 +288,8 @@
     p.d = r.d;
     return rows;
   }
+
+  const gripOf = (p) => (G.route.grip || 1) * (p.phase === 'race' ? G.map.segs[p.seg].road.gripAt(p.s) : 1);
 
   // Between a segment's two ends; before the start and past the lot the road runs on.
   const along = (road, s) => (s >= -MAP.PICK_TOL || road.isStart) && (s <= road.length + MAP.PICK_TOL || road.atLot);
@@ -321,7 +334,7 @@
       p.bumps++;
       TR.Audio.bump();
     }
-    if (p.phase === 'race' && t.y < G.lot.oy - 40) {
+    if (p.phase === 'race' && inLot(t)) {
       p.phase = 'park';
       p.times.race = G.time;
       if (!G.firstLot) {
@@ -356,7 +369,18 @@
     return best || own;
   }
 
+  const inLot = (t) => t.y < G.lot.oy - 40;
+
   function rails(p, dt) {
+    if (pushRails(p, dt) && p.railCd <= 0) {
+      p.railCd = 0.6;
+      p.bumps++;
+      TR.Audio.bump();
+      p.shake = Math.max(p.shake, 0.3);
+    }
+  }
+
+  function pushRails(p, dt) {
     const t = p.truck, sg = G.map.segs[p.seg], cands = G.map.candidates(p.seg, p.s);
     // All corners come from one snapshot of the truck, so only the deepest may push:
     // adding up every corner's overshoot would move the truck several times too far.
@@ -370,24 +394,37 @@
         if (push && push.over > 0 && (!worst || push.over > worst.over)) worst = push;
       }
     }
-    if (worst) {
-      t.x += worst.nx * worst.over;
-      t.y += worst.ny * worst.over;
-      t.v *= Math.pow(0.35, dt);
-      if (p.railCd <= 0) {
-        p.railCd = 0.6;
-        p.bumps++;
-        TR.Audio.bump();
-        p.shake = Math.max(p.shake, 0.3);
-      }
-    }
+    if (!worst) return false;
+    t.x += worst.nx * worst.over;
+    t.y += worst.ny * worst.over;
+    t.v *= Math.pow(0.35, dt);
+    return true;
   }
 
   function collideTrucks(dt) {
     const [a, b] = G.players;
+    // Read before the push slows both trucks down.
+    const rammer = Math.abs(a.truck.v) >= Math.abs(b.truck.v) ? a : b, fast = Math.abs(rammer.truck.v) > 25;
+    if (!pushTrucks(a, b, dt)) return;
+    // Contact frames less than touchCd (0.5 s) apart count as one contact, charged at most
+    // once, on its first frame above impact speed, however long the trucks stay pressed.
+    if (G.touchCd <= 0) {
+      G.touchCharged = false;
+      TR.Audio.bump();
+    }
+    G.touchCd = 0.5;
+    if (!G.touchCharged && fast) {
+      G.touchCharged = true;
+      rammer.bumps++;
+      toast(rammer, 'TIRA ÇARPTIN! ' + RULES.bump, '#ff8a80', 1.2);
+    }
+  }
+
+  // Pushes the two trucks apart and slows both down; true on contact.
+  function pushTrucks(a, b, dt) {
     const fa = a.phase === 'unload' || a.phase === 'done';
     const fb = b.phase === 'unload' || b.phase === 'done';
-    if (fa && fb) return;
+    if (fa && fb) return false;
     const wa = fa ? 0 : fb ? 1 : 0.5, wb = fb ? 0 : fa ? 1 : 0.5;
     let contact = false;
     for (let iter = 0; iter < 2; iter++) {
@@ -407,23 +444,11 @@
       contact = true;
     }
     if (contact) {
-      // Contact frames less than touchCd (0.5 s) apart count as one contact, charged at most
-      // once, on its first frame above impact speed, however long the trucks stay pressed.
-      if (G.touchCd <= 0) {
-        G.touchCharged = false;
-        TR.Audio.bump();
-      }
-      G.touchCd = 0.5;
-      const rammer = Math.abs(a.truck.v) >= Math.abs(b.truck.v) ? a : b;
-      if (!G.touchCharged && Math.abs(rammer.truck.v) > 25) {
-        G.touchCharged = true;
-        rammer.bumps++;
-        toast(rammer, 'TIRA ÇARPTIN! ' + RULES.bump, '#ff8a80', 1.2);
-      }
       const f = Math.pow(0.25, dt);
       a.truck.v *= f;
       b.truck.v *= f;
     }
+    return contact;
   }
 
   function crash(p, headOn, car) {
@@ -516,6 +541,12 @@
 
   function recover(p) {
     p.resets++;
+    putBack(p);
+    if (p.phase === 'race') toast(p, 'Yola dönüldü ' + RULES.reset, '#ffd54f', 1.2);
+    else toast(p, 'Girişe dönüldü ' + RULES.reset, '#ffd54f', 1.2);
+  }
+
+  function putBack(p) {
     if (p.phase === 'race') {
       const road = G.map.segs[p.seg].road;
       const s = Math.min(road.length, Math.max(road.isStart ? R.START_S : MAP.NODE_CLEAR, p.s));
@@ -524,14 +555,15 @@
       p.truck.place(q.x, q.y, q.h);
       p.truck.stun = 1.5;
       p.hint = -1;
-      toast(p, 'Yola dönüldü ' + RULES.reset, '#ffd54f', 1.2);
     } else {
       const e = G.lot.entrance();
       p.truck.place(e.x + (p.idx === 0 ? -150 : 40), e.y, e.th);
       p.truck.stun = 1;
-      toast(p, 'Girişe dönüldü ' + RULES.reset, '#ffd54f', 1.2);
     }
   }
+
+  // An online guest's referee replays the host's frames with these; they move only the trucks they are given.
+  Object.assign(G, { follow, gripOf, putBack, pushTrucks, pushRails, inLot });
 
   function startUnload(p) {
     p.phase = 'unload';
@@ -831,7 +863,7 @@
   // ---------- loop ----------
   let last = performance.now();
   function frame(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(MAX_DT, (now - last) / 1000);
     last = now;
     TR.UI.handleKeys();
     if (TR.Online.role === 'guest') guestUpdate(dt);
