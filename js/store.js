@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR;
   const PREFIX = 'tirYarisi.v1.';
 

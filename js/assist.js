@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U, T = TR.TRUCK, DS = TR.ROAD.DS;
 
   // MARGIN is the share of the grip-limited bend speed the profile allows. BRAKE_SHARE is the share of

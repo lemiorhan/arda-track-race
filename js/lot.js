@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U;
 
   // Local coordinates: origin at the lot entrance (the end of the road), y grows downwards.

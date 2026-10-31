@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U, MAP = TR.MAP, JAM = TR.JAM;
   const LANE = TR.ROAD.LANE;
   const COLORS = ['#f4f4f4', '#26282b', '#c62828', '#1565c0', '#2e7d32', '#f9a825', '#6a1b9a', '#8d6e63', '#00838f', '#ef6c00', '#90a4ae'];

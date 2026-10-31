@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U;
 
   // Units: 1 unit ≈ 10 cm. The reference point is the tractor's rear axle,

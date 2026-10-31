@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, T = TR.TRUCK, DS = TR.ROAD.DS;
   // NIGHT and TUNNEL are how dark the layer gets. A tunnel darkens over RAMP centred on each portal.
   // Ceiling lamps sit every LAMP_STEP with radius LAMP_R; street lamps light JUNCTION_R around a junction or a

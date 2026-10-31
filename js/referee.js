@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR;
   const G = () => TR.Game;
   const Truck = TR.Truck, update = Truck.prototype.update;
@@ -23,15 +24,13 @@
     for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
     return (h >>> 0).toString(36) + '.' + s.length;
   };
-  // DRAFT, TURBO and the game's moves come from game.js, which loads later; they are read on first use.
-  const shipped = String(update) + JSON.stringify(TR.TRUCK);
-  const REPLAYED = ['follow', 'gripOf', 'putBack', 'pushTrucks', 'pushRails', 'inLot'];
+  // Taken on first use, once the scripts after this one have handed in theirs too.
   let fp = null;
 
   const blank = () => [0, 1].map(() => Object.fromEntries(RULES.map((k) => [k, 0])));
   const Ref = (TR.Referee = { FIELDS, PHASES, RULES, EPS, MIN_HITS, on: false, off: null, round: null, match: null });
 
-  Ref.fingerprint = () => fp || (fp = hash(shipped + JSON.stringify([G().DRAFT, G().TURBO]) + REPLAYED.map((k) => String(G()[k])).join('')));
+  Ref.fingerprint = () => fp || (fp = hash(TR.files.map(String).join('')));
   Ref.fields = (t) => FIELDS.map((k) => t[k]);
   Ref.row = (time, dt, players, steps) => [time, dt].concat(...players.map((p, i) =>
     (steps[i] || [0, 0, 0, 0, 0]).concat(p.truck.grip, PHASES.indexOf(p.phase), Ref.fields(p.truck))));
@@ -69,8 +68,8 @@
   const racing = (p) => p.phase === 'race' || p.phase === 'park';
 
   // Plays one host frame on the shadow players in the order the host's update runs, then holds the result
-  // against the host's and takes the host's: a single float apart stays a single break. A truck whose part
-  // of the frame is broken stays where it was.
+  // against the host's and takes the host's truck fields: a single float apart stays a single break. A truck
+  // whose part of the frame is broken stays where it was.
   function frame(row, resets) {
     const r = Ref.round, g = G(), sh = r.players, T = TR.TRUCK;
     if (!Array.isArray(row) || row.length !== ROW) return both('girdi');
@@ -114,9 +113,11 @@
       else if (MOVED.some(off)) hit(i, 'süreklilik');
       if (!(Math.abs(now.v) <= Math.abs(t.v) + EPS && Math.sign(now.v) * Math.sign(t.v) >= 0 && now.stun >= t.stun - EPS)) hit(i, 'süreklilik');
       const parked = p.phase === 'park' && phase === 'unload' && g.lot.parkStatus(t, i).ok;
-      if (phase !== p.phase && !parked && !(p.phase === 'unload' && phase === 'done')) hit(i, 'aşama');
       Object.assign(t, now);
-      p.phase = phase;
+      // A phase the replay does not reach is not taken: a shadow that took it would stop being replayed.
+      if (phase === undefined) hit(i, 'girdi');
+      else if (phase === p.phase || parked || (p.phase === 'unload' && phase === 'done')) p.phase = phase;
+      else hit(i, 'aşama');
     });
   }
 

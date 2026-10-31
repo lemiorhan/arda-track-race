@@ -1,6 +1,9 @@
 'use strict';
-(function () {
+(function file() {
   const TR = (window.TR = window.TR || {});
+  // Every script hands in its own function, so the online referee can tell a host running other code by
+  // the whole text of it, closures and constants included.
+  TR.files = [file];
   const U = (TR.U = {});
 
   U.clamp = (v, a, b) => (v < a ? a : v > b ? b : v);

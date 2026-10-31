@@ -449,9 +449,9 @@ test('a host that shows a truck in another phase than its chain breaks the phase
   assert.equal(total(c0), 0, JSON.stringify(c0));
 });
 
-// From one frame on, the frames and snapshots say truck 0 is in the park while it races on the road: the
-// referee counts the change once and goes on from the host's phase. Phase 1 is park.
-test('a host that says a racing truck is in the park breaks the phase rule once', () => {
+// From one frame on, the frames and snapshots say truck 0 is in the park while it races on the road. Phase 1
+// is park. The referee keeps truck 0 racing, so every frame after breaks the rule again.
+test('a host that says a racing truck is in the park breaks the phase rule every frame', () => {
   const m = match(0), G = m.host.TR.Game;
   m.race();
   for (let f = 0; f < 10; f++) m.step();
@@ -461,8 +461,24 @@ test('a host that says a racing truck is in the park breaks the phase rule once'
   });
   for (let f = 0; f < 60; f++) m.step();
   assert.equal(G.players[0].phase, 'race');
-  assert.deepEqual({ ...m.counts()[0] }, Object.assign(blank(), { aşama: 1 }));
-  clean({ counts: () => [m.counts()[1]] });
+  assert.equal(m.guest.TR.Referee.round.players[0].phase, 'race');
+  const [c0, c1] = m.counts();
+  assert.deepEqual(broken(c0), ['aşama']);
+  assert.ok(c0['aşama'] >= 50, JSON.stringify(c0));
+  assert.equal(total(c1), 0, JSON.stringify(c1));
+});
+
+// A phase number with no phase behind it would leave the shadow in no phase at all, and unreplayed.
+test('a host that sends a phase that does not exist breaks the input rule every frame', () => {
+  const m = match(0);
+  m.race();
+  for (let f = 0; f < 10; f++) m.step();
+  tamper(m, (msg) => msg.frames.forEach((r) => (r[at(0, 6)] = 7)));
+  for (let f = 0; f < 60; f++) m.step();
+  assert.equal(m.guest.TR.Referee.round.players[0].phase, 'race');
+  const [c0, c1] = m.counts();
+  assert.ok(c0.girdi >= 50, JSON.stringify(c0));
+  assert.equal(total(c1), 0, JSON.stringify(c1));
 });
 
 // Truck 0 unloads in its bay and truck 1 drives into its side: an unloading truck does not give way, so the
@@ -885,7 +901,22 @@ const versions = [
   ['another road follow', { hostSource: (p, s) => (p.endsWith('game.js') ? s.replace('function follow(p) {', 'function follow(p) {;') : s) }],
   ['another road grip', { hostSource: (p, s) => (p.endsWith('game.js') ? s.replace('road.gripAt(p.s) : 1)', 'road.gripAt(p.s) : 0.9)') : s) }],
   ['another lot line', { hostSource: (p, s) => (p.endsWith('game.js') ? s.replace('G.lot.oy - 40', 'G.lot.oy - 41') : s) }],
+  ['another barrier line', { hostSource: (p, s) => (p.endsWith('game.js') ? s.replace('Math.abs(loc.d) - road.railAt(loc.s)', 'Math.abs(loc.d) - road.railAt(loc.s) - 1') : s) }],
+  ['another ring island', { hostSource: (p, s) => (p.endsWith('road.js') ? s.replace('RING_R: 120', 'RING_R: 121') : s) }],
+  ['another junction limit', { hostSource: (p, s) => (p.endsWith('junctions.js') ? s.replace('if (r < JN.RING_R)', 'if (r <= JN.RING_R)') : s) }],
+  ['another lot wall push', { hostSource: (p, s) => (p.endsWith('lot.js') ? s.replace('m.depth + 0.05', 'm.depth + 0.06') : s) }],
+  ['another road rail', { hostSource: (p, s) => (p.endsWith('road.js') ? s.replace('RAIL = 150', 'RAIL = 151') : s) }],
 ];
+
+test('every script the page loads hands its whole text in for the fingerprint, in page order', () => {
+  const m = match(0), files = m.guest.TR.files, list = scriptList();
+  assert.ok(list.length >= 20, 'only ' + list.length + ' scripts in index.html');
+  assert.equal(files.length, list.length);
+  list.forEach((src, k) => {
+    const text = fs.readFileSync(new URL('../' + src, import.meta.url), 'utf8');
+    assert.ok(text.includes(String(files[k])) && String(files[k]).length > text.length - 40, src);
+  });
+});
 for (const [what, opts] of versions) {
   test('a host with ' + what + ' turns the referee off, and the guest is told', () => {
     const m = match(0, opts), R = m.guest.TR.Referee;
@@ -997,14 +1028,14 @@ test('a truck that starts unloading with its wheels turned breaks no rule', () =
 
 // The host's lot takes any stop for truck 0's park, and truck 0 stands at the lot's entrance.
 test('a host that unloads a truck that is not parked breaks the phase rule', () => {
-  const { m } = finish(null, (m) => {
+  const { m, rr } = finish(null, (m) => {
     const lot = m.host.TR.Game.lot, status = lot.parkStatus.bind(lot), e = lot.entrance();
     lot.parkStatus = (t, i) => Object.assign(status(t, i), i === 0 ? { ok: true } : {});
     m.host.TR.Game.players[0].truck.place(e.x, e.y, e.th);
   });
   const [c0, c1] = m.counts();
   assert.deepEqual(broken(c0), ['aşama']);
-  assert.equal(c0['aşama'], 1);
+  assert.ok(rr.startsWith('Şüpheli hareket · Ev: aşama ×'), rr);
   assert.equal(total(c1), 0, JSON.stringify(c1));
 });
 

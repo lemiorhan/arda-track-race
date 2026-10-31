@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR;
   const PREFIX = 'tir-yarisi-';
   // No 0/O or 1/I/L: the code is read out to the other player or typed off another screen.

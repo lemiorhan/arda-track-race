@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U, R = TR.ROAD, JN = TR.JUNCTION, POINTS = TR.POINTS, SECTIONS = TR.SECTIONS;
 
   // A round's road network: northbound segments joined at fork and merge nodes, from the start node in the

@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U, T = TR.TRUCK, R = TR.ROAD, MAP = TR.MAP, RULES = TR.SCORE_RULES;
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');

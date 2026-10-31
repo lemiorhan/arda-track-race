@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR, U = TR.U;
   const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
   const KEYNAMES = [

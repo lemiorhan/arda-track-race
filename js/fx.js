@@ -1,5 +1,6 @@
 'use strict';
-(function () {
+(function file() {
+  window.TR.files.push(file);
   const TR = window.TR;
   // Particles live in world coordinates in a fixed ring: once FX_MAX are alive the oldest is reused,
   // so a burst never allocates and never grows the per-frame cost past FX_MAX.
